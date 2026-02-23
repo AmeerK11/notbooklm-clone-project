@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from data.db import Base
@@ -45,6 +45,9 @@ class Notebook(Base):
     )
     chat_threads: Mapped[list[ChatThread]] = relationship(
         "ChatThread", back_populates="notebook", cascade="all, delete-orphan"
+    )
+    artifacts: Mapped[list[Artifact]] = relationship(
+        "Artifact", back_populates="notebook", cascade="all, delete-orphan"
     )
 
 
@@ -122,3 +125,25 @@ class MessageCitation(Base):
 
     message: Mapped[Message] = relationship("Message", back_populates="citations")
     source: Mapped[Source] = relationship("Source", back_populates="citations")
+
+class Artifact(Base):
+    """Generated artifacts: quizzes, podcasts, reports."""
+    __tablename__ = "artifacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    notebook_id: Mapped[int] = mapped_column(
+        ForeignKey("notebooks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    type: Mapped[str] = mapped_column(String(50), nullable=False)  # 'quiz', 'podcast', 'report'
+    title: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    file_path: Mapped[str | None] = mapped_column(String(1024))
+    artifact_metadata: Mapped[dict | None] = mapped_column("metadata", JSON)
+    content: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    notebook: Mapped[Notebook] = relationship("Notebook", back_populates="artifacts")

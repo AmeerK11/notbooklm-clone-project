@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-
+from data.models import Artifact
 from sqlalchemy.orm import Session
 
 from data.models import ChatThread, Message, MessageCitation, Notebook, Source, User
@@ -163,3 +163,60 @@ def create_message_citations(
     for row in rows:
         db.refresh(row)
     return rows
+
+def get_artifact(db: Session, artifact_id: int) -> Artifact | None:
+    return db.get(Artifact, artifact_id)
+
+
+def create_artifact(
+    db: Session,
+    notebook_id: int,
+    artifact_type: str,
+    title: str | None = None,
+    metadata: dict | None = None,
+) -> Artifact:
+    artifact = Artifact(
+        notebook_id=notebook_id,
+        type=artifact_type,
+        title=title,
+        artifact_metadata=metadata or {},
+        status="pending",
+    )
+    db.add(artifact)
+    db.commit()
+    db.refresh(artifact)
+    return artifact
+
+
+def list_artifacts(db: Session, notebook_id: int, artifact_type: str | None = None) -> list[Artifact]:
+    query = db.query(Artifact).filter(Artifact.notebook_id == notebook_id)
+    if artifact_type:
+        query = query.filter(Artifact.type == artifact_type)
+    return query.order_by(Artifact.created_at.desc()).all()
+
+
+def update_artifact(
+    db: Session,
+    artifact_id: int,
+    status: str,
+    content: str | None = None,
+    file_path: str | None = None,
+    error_message: str | None = None,
+) -> Artifact | None:
+    artifact = db.get(Artifact, artifact_id)
+    if not artifact:
+        return None
+    
+    artifact.status = status
+    if content:
+        artifact.content = content
+    if file_path:
+        artifact.file_path = file_path
+    if error_message:
+        artifact.error_message = error_message
+    if status == "ready":
+        artifact.generated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(artifact)
+    return artifact
