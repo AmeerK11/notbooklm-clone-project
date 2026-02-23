@@ -1,0 +1,27 @@
+# Core runtime
+# Recommended exact Python version for reproducibility
+python==3.10.11
+chromadb
+sentence-transformers
+transformers
+pymupdf
+python-pptx
+requests
+beautifulsoup4
+readability-lxml
+sqlmodel
+sqlalchemy
+nltk
+tqdm
+
+# Testing / dev
+pytest
+
+# Optional / on-demand (uncomment to enable)
+# openai
+# tiktoken
+# langchain
+# pdf2image
+# pytesseract
+# pillow
+# python-dotenv
