@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.concurrency import run_in_threadpool
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from data import crud
-from data.db import get_db, init_db
+from data.db import get_db, init_db, SessionLocal
 from src.ingestion.service import ingest_source, query_notebook_chunks
+from src.artifacts.quiz_generator import QuizGenerator
+from src.artifacts.podcast_generator import PodcastGenerator
 from utils.llm_client import LLMConfigError, generate_chat_completion
 from utils.prompt_templates import build_rag_system_prompt, build_rag_user_prompt
 
@@ -104,6 +108,35 @@ class ChatResponse(BaseModel):
     user_message: MessageResponse
     assistant_message: MessageResponse
     citations: list[CitationResponse]
+
+
+class QuizGenerateRequest(BaseModel):
+    owner_user_id: int | None = None
+    num_questions: int = Field(default=5, ge=1, le=20)
+    difficulty: str = Field(default="medium")
+    topic_focus: str | None = None
+    title: str | None = None
+
+
+class PodcastGenerateRequest(BaseModel):
+    owner_user_id: int | None = None
+    duration: str = Field(default="5min")
+    topic_focus: str | None = None
+    title: str | None = None
+
+
+class ArtifactResponse(BaseModel):
+    id: int
+    notebook_id: int
+    type: str
+    title: str | None
+    status: str
+    content: str | None
+    file_path: str | None
+    metadata: dict | None
+    error_message: str | None
+    created_at: datetime
+    generated_at: datetime | None
 
 
 MAX_HISTORY_MESSAGES = 8
@@ -450,6 +483,206 @@ def chat_on_thread(
 @threads_router.get("")
 def list_threads_placeholder() -> dict[str, str]:
     return {"message": "Use /notebooks/{notebook_id}/threads endpoints."}
+
+
+# ── Artifact helpers ──────────────────────────────────────────────────────────
+
+def _artifact_response(artifact) -> ArtifactResponse:
+    return ArtifactResponse(
+        id=artifact.id,
+        notebook_id=artifact.notebook_id,
+        type=artifact.type,
+        title=artifact.title,
+        status=artifact.status,
+        content=artifact.content,
+        file_path=artifact.file_path,
+        metadata=artifact.artifact_metadata,
+        error_message=artifact.error_message,
+        created_at=artifact.created_at,
+        generated_at=artifact.generated_at,
+    )
+
+
+def _run_podcast_background(
+    artifact_id: int,
+    user_id: int,
+    notebook_id: int,
+    duration: str,
+    topic_focus: str | None,
+) -> None:
+    """Background task: generate podcast and update the artifact record."""
+    db = SessionLocal()
+    try:
+        crud.update_artifact(db, artifact_id, status="processing")
+        generator = PodcastGenerator()
+        result = generator.generate_podcast(
+            user_id=str(user_id),
+            notebook_id=str(notebook_id),
+            duration_target=duration,
+            topic_focus=topic_focus,
+        )
+        if "error" in result:
+            crud.update_artifact(db, artifact_id, status="failed", error_message=result["error"])
+        else:
+            transcript_json = json.dumps(result["transcript"], ensure_ascii=False)
+            generator.save_transcript(result, str(user_id), str(notebook_id))
+            crud.update_artifact(
+                db,
+                artifact_id,
+                status="ready",
+                content=transcript_json,
+                file_path=result.get("audio_path"),
+            )
+    except Exception as exc:
+        crud.update_artifact(db, artifact_id, status="failed", error_message=str(exc))
+    finally:
+        db.close()
+
+
+# ── Artifact endpoints ────────────────────────────────────────────────────────
+
+@notebooks_router.post("/{notebook_id}/artifacts/quiz", response_model=ArtifactResponse)
+async def generate_quiz_for_notebook(
+    notebook_id: int,
+    payload: QuizGenerateRequest,
+    db: Session = Depends(get_db),
+) -> ArtifactResponse:
+    owner_user_id = payload.owner_user_id or 1
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.create_artifact(
+        db=db,
+        notebook_id=notebook_id,
+        artifact_type="quiz",
+        title=payload.title or f"Quiz – {payload.difficulty} ({payload.num_questions}q)",
+        metadata={
+            "num_questions": payload.num_questions,
+            "difficulty": payload.difficulty,
+            "topic_focus": payload.topic_focus,
+        },
+    )
+    crud.update_artifact(db, artifact.id, status="processing")
+
+    try:
+        generator = QuizGenerator()
+        result = await run_in_threadpool(
+            generator.generate_quiz,
+            user_id=str(owner_user_id),
+            notebook_id=str(notebook_id),
+            num_questions=payload.num_questions,
+            difficulty=payload.difficulty,
+            topic_focus=payload.topic_focus,
+        )
+    except Exception as exc:
+        crud.update_artifact(db, artifact.id, status="failed", error_message=str(exc))
+        raise HTTPException(status_code=500, detail=f"Quiz generation failed: {exc}") from exc
+
+    if "error" in result:
+        artifact = crud.update_artifact(db, artifact.id, status="failed", error_message=result["error"])
+    else:
+        content_json = json.dumps(result, ensure_ascii=False)
+        generator.save_quiz(result, str(owner_user_id), str(notebook_id))
+        artifact = crud.update_artifact(db, artifact.id, status="ready", content=content_json)
+
+    return _artifact_response(artifact)
+
+
+@notebooks_router.post("/{notebook_id}/artifacts/podcast", response_model=ArtifactResponse)
+def generate_podcast_for_notebook(
+    notebook_id: int,
+    payload: PodcastGenerateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> ArtifactResponse:
+    owner_user_id = payload.owner_user_id or 1
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.create_artifact(
+        db=db,
+        notebook_id=notebook_id,
+        artifact_type="podcast",
+        title=payload.title or f"Podcast – {payload.duration}",
+        metadata={
+            "duration": payload.duration,
+            "topic_focus": payload.topic_focus,
+        },
+    )
+
+    background_tasks.add_task(
+        _run_podcast_background,
+        artifact_id=artifact.id,
+        user_id=owner_user_id,
+        notebook_id=notebook_id,
+        duration=payload.duration,
+        topic_focus=payload.topic_focus,
+    )
+
+    return _artifact_response(artifact)
+
+
+@notebooks_router.get("/{notebook_id}/artifacts", response_model=list[ArtifactResponse])
+def list_artifacts_for_notebook(
+    notebook_id: int,
+    artifact_type: str | None = None,
+    owner_user_id: int = 1,
+    db: Session = Depends(get_db),
+) -> list[ArtifactResponse]:
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifacts = crud.list_artifacts(db=db, notebook_id=notebook_id, artifact_type=artifact_type)
+    return [_artifact_response(a) for a in artifacts]
+
+
+@notebooks_router.get("/{notebook_id}/artifacts/{artifact_id}", response_model=ArtifactResponse)
+def get_artifact_for_notebook(
+    notebook_id: int,
+    artifact_id: int,
+    owner_user_id: int = 1,
+    db: Session = Depends(get_db),
+) -> ArtifactResponse:
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.get_artifact(db=db, artifact_id=artifact_id)
+    if artifact is None or artifact.notebook_id != notebook_id:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+
+    return _artifact_response(artifact)
+
+
+@notebooks_router.get("/{notebook_id}/artifacts/{artifact_id}/audio")
+def download_podcast_audio(
+    notebook_id: int,
+    artifact_id: int,
+    owner_user_id: int = 1,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.get_artifact(db=db, artifact_id=artifact_id)
+    if artifact is None or artifact.notebook_id != notebook_id:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    if artifact.type != "podcast":
+        raise HTTPException(status_code=400, detail="Artifact is not a podcast.")
+    if artifact.status != "ready":
+        raise HTTPException(status_code=409, detail=f"Podcast not ready yet (status: {artifact.status}).")
+    if not artifact.file_path or not Path(artifact.file_path).exists():
+        raise HTTPException(status_code=404, detail="Audio file not found on disk.")
+
+    return FileResponse(
+        path=artifact.file_path,
+        media_type="audio/mpeg",
+        filename=Path(artifact.file_path).name,
+    )
 
 
 app.include_router(auth_router)
