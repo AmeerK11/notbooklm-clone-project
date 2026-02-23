@@ -1,13 +1,23 @@
-# Python
+# Environment and secrets
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Python cache/build artifacts
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 *$py.class
 *.so
 .Python
-env/
-.venv/
-venv/
-ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
 build/
 develop-eggs/
 dist/
@@ -24,30 +34,26 @@ wheels/
 .installed.cfg
 *.egg
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
+# Virtual environments
+env/
+myenv/
+.venv/
+venv/
+ENV/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Data / Storage (local test artifacts)
-data/
+# Local databases and vector stores
 *.db
+*.sqlite
 *.sqlite3
 chroma_data/
+data/chroma_db/
+data/users/
+
+# Uploaded user files
+uploads/
+
+# Streamlit local state
+.streamlit/
 
 # Cache
 .cache/
@@ -56,3 +62,11 @@ chroma_data/
 # Node/npm (if using)
 node_modules/
 npm-debug.log
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

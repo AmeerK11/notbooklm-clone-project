@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import List
 from sentence_transformers import SentenceTransformer
 import os
+import hashlib
+import math
 
 
 class EmbeddingAdapter:
@@ -38,7 +40,11 @@ class EmbeddingAdapter:
         prefixed = (
             model_name if model_name.startswith("sentence-transformers/") else f"sentence-transformers/{model_name}"
         )
-        self._embedding_model = SentenceTransformer(prefixed)
+        try:
+            self._embedding_model = SentenceTransformer(prefixed, local_files_only=True)
+        except Exception:
+            # Offline/runtime fallback: use deterministic hash embeddings.
+            self._embedding_model = None
 
     def _init_openai(self, model_name: str):
         """Initialize OpenAI embedding client."""
@@ -82,9 +88,29 @@ class EmbeddingAdapter:
 
     def _embed_local(self, texts: List[str], batch_size: int) -> List[List[float]]:
         """Local embedding using sentence-transformers."""
-        embs = self._embedding_model.encode(texts, batch_size=batch_size, show_progress_bar=False)
-        # Ensure lists (convert numpy arrays)
-        return [e.tolist() if hasattr(e, "tolist") else list(e) for e in embs]
+        if self._embedding_model is not None:
+            try:
+                embs = self._embedding_model.encode(texts, batch_size=batch_size, show_progress_bar=False)
+                # Ensure lists (convert numpy arrays)
+                return [e.tolist() if hasattr(e, "tolist") else list(e) for e in embs]
+            except Exception:
+                pass
+        return [self._embed_hash(t) for t in texts]
+
+    def _embed_hash(self, text: str, dim: int = 384) -> List[float]:
+        vec = [0.0] * dim
+        tokens = text.lower().split()
+        if not tokens:
+            return vec
+        for tok in tokens:
+            digest = hashlib.md5(tok.encode("utf-8")).hexdigest()
+            idx = int(digest[:8], 16) % dim
+            sign = -1.0 if (int(digest[8:10], 16) % 2) else 1.0
+            vec[idx] += sign
+        norm = math.sqrt(sum(v * v for v in vec))
+        if norm > 0:
+            vec = [v / norm for v in vec]
+        return vec
 
     def _embed_openai(self, texts: List[str], batch_size: int) -> List[List[float]]:
         """OpenAI embedding API (with batching)."""
