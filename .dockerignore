@@ -7,7 +7,7 @@ __pycache__
 *.pyo
 *.pyd
 *.log
-data
+data/users
 uploads
 notebooklm.db
 tests
