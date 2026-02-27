@@ -49,16 +49,19 @@ def chunk_text(
     # Leave room for special tokens.
     effective_chunk_size = min(chunk_size_tokens, max(32, model_max - 2))
     effective_overlap = min(overlap_tokens, max(0, effective_chunk_size // 2))
-    try:
-        sentences = nltk.sent_tokenize(text)
-    except LookupError:
-        # punkt not available and offline mode: fallback sentence split.
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        sentences = [s for s in sentences if s.strip()]
+    def _safe_sent_tokenize(raw_text: str) -> List[str]:
+        try:
+            return nltk.sent_tokenize(raw_text)
+        except LookupError:
+            # punkt not available and offline mode: fallback sentence split.
+            split = re.split(r"(?<=[.!?])\s+", raw_text)
+            return [s for s in split if s.strip()]
+
+    sentences = _safe_sent_tokenize(text)
     # Fallback: if tokenization didn't split (e.g. sentences glued without spaces)
     if len(sentences) == 1 and re.search(r"\.\w", text):
         fallback = re.sub(r"\.(?=[A-Za-z0-9])", ". ", text)
-        sentences = nltk.sent_tokenize(fallback)
+        sentences = _safe_sent_tokenize(fallback)
 
     chunks = []
     cur_sents = []

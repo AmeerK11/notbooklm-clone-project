@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 import os
+from typing import Any
 
 import requests
 import streamlit as st
@@ -11,77 +11,133 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 REQUEST_TIMEOUT_SECONDS = 30
 
 
-def api_get(path: str, params: dict | None = None) -> tuple[bool, dict | list | str]:
+def get_http_session() -> requests.Session:
+    session = st.session_state.get("http_session")
+    if isinstance(session, requests.Session):
+        return session
+    session = requests.Session()
+    st.session_state["http_session"] = session
+    return session
+
+
+def api_request(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    json_payload: dict | None = None,
+    data: dict[str, str | int] | None = None,
+    files: dict[str, tuple[str, bytes, str]] | None = None,
+) -> tuple[bool, dict | list | str, int | None]:
     base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+    url = f"{base_url}{path}"
     try:
-        response = requests.get(
-            f"{base_url}{path}", params=params, timeout=REQUEST_TIMEOUT_SECONDS
-        )
-        response.raise_for_status()
-        return True, response.json()
-    except requests.RequestException as exc:
-        return False, str(exc)
-
-
-def api_post(path: str, payload: dict) -> tuple[bool, dict | list | str]:
-    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
-    try:
-        response = requests.post(
-            f"{base_url}{path}", json=payload, timeout=REQUEST_TIMEOUT_SECONDS
-        )
-        response.raise_for_status()
-        return True, response.json()
-    except requests.RequestException as exc:
-        return False, str(exc)
-
-
-def api_patch(path: str, payload: dict) -> tuple[bool, dict | list | str]:
-    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
-    try:
-        response = requests.patch(
-            f"{base_url}{path}", json=payload, timeout=REQUEST_TIMEOUT_SECONDS
-        )
-        response.raise_for_status()
-        return True, response.json()
-    except requests.RequestException as exc:
-        return False, str(exc)
-
-
-def api_delete(path: str, params: dict | None = None) -> tuple[bool, dict | list | str]:
-    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
-    try:
-        response = requests.delete(
-            f"{base_url}{path}", params=params, timeout=REQUEST_TIMEOUT_SECONDS
-        )
-        response.raise_for_status()
-        return True, response.json()
-    except requests.RequestException as exc:
-        return False, str(exc)
-
-
-def api_post_multipart(
-    path: str, data: dict[str, str | int], files: dict[str, tuple[str, bytes, str]]
-) -> tuple[bool, dict | list | str]:
-    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
-    try:
-        response = requests.post(
-            f"{base_url}{path}",
+        response = get_http_session().request(
+            method=method,
+            url=url,
+            params=params,
+            json=json_payload,
             data=data,
             files=files,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
-        return True, response.json()
+        status_code = response.status_code
+        if 200 <= status_code < 300:
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                return True, response.json(), status_code
+            text_body = response.text.strip()
+            return True, (text_body if text_body else "ok"), status_code
+
+        try:
+            error_body: dict | list | str = response.json()
+        except ValueError:
+            error_body = response.text
+        return False, f"HTTP {status_code}: {error_body}", status_code
     except requests.RequestException as exc:
-        return False, str(exc)
+        return False, str(exc), None
 
 
-def fetch_notebooks(owner_user_id: int) -> tuple[bool, list[dict] | str]:
-    ok, result = api_get("/notebooks", params={"owner_user_id": owner_user_id})
+def api_get(path: str, params: dict | None = None) -> tuple[bool, dict | list | str, int | None]:
+    return api_request("GET", path, params=params)
+
+
+def api_post(path: str, payload: dict) -> tuple[bool, dict | list | str, int | None]:
+    return api_request("POST", path, json_payload=payload)
+
+
+def api_patch(path: str, payload: dict) -> tuple[bool, dict | list | str, int | None]:
+    return api_request("PATCH", path, json_payload=payload)
+
+
+def api_delete(path: str) -> tuple[bool, dict | list | str, int | None]:
+    return api_request("DELETE", path)
+
+
+def api_get_bytes(path: str) -> tuple[bool, bytes | str, int | None]:
+    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+    url = f"{base_url}{path}"
+    try:
+        response = get_http_session().request(
+            method="GET",
+            url=url,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        return False, str(exc), None
+
+    if 200 <= response.status_code < 300:
+        return True, response.content, response.status_code
+    return False, f"HTTP {response.status_code}: {response.text}", response.status_code
+
+
+def api_post_multipart(
+    path: str,
+    data: dict[str, str | int],
+    files: dict[str, tuple[str, bytes, str]],
+) -> tuple[bool, dict | list | str, int | None]:
+    return api_request("POST", path, data=data, files=files)
+
+
+def fetch_notebooks() -> tuple[bool, list[dict] | str]:
+    ok, result, _ = api_get("/notebooks")
     if not ok:
         return False, str(result)
     notebooks = result if isinstance(result, list) else []
     return True, notebooks
+
+
+def get_query_param(name: str) -> str | None:
+    try:
+        value = st.query_params.get(name)
+    except Exception:
+        params = st.experimental_get_query_params()
+        raw = params.get(name)
+        if isinstance(raw, list):
+            return str(raw[0]) if raw else None
+        if raw is None:
+            return None
+        return str(raw)
+
+    if isinstance(value, list):
+        return str(value[0]) if value else None
+    if value is None:
+        return None
+    return str(value)
+
+
+def remove_query_param(name: str) -> None:
+    try:
+        if name in st.query_params:
+            del st.query_params[name]
+        return
+    except Exception:
+        pass
+
+    params = st.experimental_get_query_params()
+    if name in params:
+        params.pop(name, None)
+        st.experimental_set_query_params(**params)
 
 
 st.title("NotebookLM Clone")
@@ -90,16 +146,89 @@ st.caption("Streamlit frontend shell")
 if "page" not in st.session_state:
     st.session_state["page"] = "Home"
 
+if "attempted_auto_dev_login" not in st.session_state:
+    st.session_state["attempted_auto_dev_login"] = False
+if "bridge_error" not in st.session_state:
+    st.session_state["bridge_error"] = None
+if "processed_bridge_token" not in st.session_state:
+    st.session_state["processed_bridge_token"] = None
+
+bridge_token = get_query_param("auth_bridge")
+if bridge_token and bridge_token != st.session_state["processed_bridge_token"]:
+    st.session_state["processed_bridge_token"] = bridge_token
+    bridge_ok, bridge_result, _ = api_post("/auth/bridge/exchange", {"token": bridge_token})
+    remove_query_param("auth_bridge")
+    if bridge_ok:
+        st.session_state["bridge_error"] = None
+        st.rerun()
+    st.session_state["bridge_error"] = str(bridge_result)
+    st.rerun()
+
 with st.sidebar:
     st.header("Navigation")
+    st.text_input("Backend URL", value=BACKEND_URL, key="backend_url")
+
+    auth_ok, auth_result, _ = api_get("/auth/status")
+    auth_data = auth_result if (auth_ok and isinstance(auth_result, dict)) else {}
+    auth_mode = str(auth_data.get("mode", "unknown"))
+    authenticated = bool(auth_data.get("authenticated"))
+    auth_user = auth_data.get("user") if isinstance(auth_data.get("user"), dict) else None
+
+    if auth_mode == "dev" and not authenticated and not st.session_state["attempted_auto_dev_login"]:
+        st.session_state["attempted_auto_dev_login"] = True
+        login_ok, _, _ = api_post("/auth/dev-login", {})
+        if login_ok:
+            st.rerun()
+
+    st.subheader("Auth")
+    st.caption(f"Mode: {auth_mode}")
+    bridge_error = st.session_state.get("bridge_error")
+    if bridge_error:
+        st.error(f"OAuth bridge failed: {bridge_error}")
+        st.session_state["bridge_error"] = None
+
+    if not auth_ok:
+        st.error(f"Failed to reach backend auth endpoint: {auth_result}")
+    elif authenticated and auth_user:
+        st.success(f"Signed in as {auth_user.get('email', 'unknown')}.")
+        if st.button("Sign out"):
+            api_post("/auth/logout", {})
+            st.session_state.pop("selected_notebook_id", None)
+            st.session_state.pop("selected_notebook_title", None)
+            st.session_state.pop("selected_thread_id", None)
+            st.rerun()
+    elif auth_mode == "dev":
+        with st.form("dev_login_form"):
+            email = st.text_input("Email", value="dev@example.com")
+            display_name = st.text_input("Display name", value="Dev User")
+            login_submitted = st.form_submit_button("Sign in")
+        if login_submitted:
+            login_ok, login_result, _ = api_post(
+                "/auth/dev-login",
+                {
+                    "email": email.strip() or None,
+                    "display_name": display_name.strip() or None,
+                },
+            )
+            if login_ok:
+                st.rerun()
+            st.error(f"Login failed: {login_result}")
+    elif auth_mode == "hf_oauth":
+        backend_root = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+        st.markdown(f"[Sign in with Hugging Face]({backend_root}/auth/login)")
+        st.caption("After provider login, you will be redirected back and signed in automatically.")
+        if st.button("Refresh auth"):
+            st.rerun()
+    else:
+        st.warning("Authentication is not configured.")
+
+    st.divider()
     page_options = ["Home", "Notebooks"]
     default_page = st.session_state.get("page", "Home")
     default_index = page_options.index(default_page) if default_page in page_options else 0
     page = st.radio("Go to", page_options, index=default_index)
     st.session_state["page"] = page
-    st.divider()
-    st.text_input("Backend URL", value=BACKEND_URL, key="backend_url")
-    st.number_input("Owner User ID", min_value=1, step=1, value=1, key="owner_user_id")
+
     selected_notebook_id = st.session_state.get("selected_notebook_id")
     selected_notebook_title = st.session_state.get("selected_notebook_title")
     if selected_notebook_id:
@@ -107,14 +236,22 @@ with st.sidebar:
         if st.button("Clear notebook selection"):
             st.session_state.pop("selected_notebook_id", None)
             st.session_state.pop("selected_notebook_title", None)
+            st.session_state.pop("selected_thread_id", None)
             st.rerun()
 
+if not auth_ok:
+    st.error(f"Backend auth check failed: {auth_result}")
+    st.stop()
+
+if not authenticated:
+    st.info("Sign in to continue.")
+    st.stop()
 
 if page == "Home":
     st.subheader("Home")
     st.write("Frontend is connected to your FastAPI backend.")
 
-    ok, result = api_get("/health")
+    ok, result, _ = api_get("/health")
     if ok:
         st.success("Backend health check passed.")
         st.json(result)
@@ -124,7 +261,6 @@ if page == "Home":
 
 elif page == "Notebooks":
     st.subheader("Notebooks")
-    owner_user_id = int(st.session_state["owner_user_id"])
 
     with st.form("create_notebook_form"):
         notebook_title = st.text_input("Notebook title", placeholder="e.g., AI Research Notes")
@@ -134,9 +270,8 @@ elif page == "Notebooks":
         if notebook_title.strip():
             payload = {
                 "title": notebook_title.strip(),
-                "owner_user_id": owner_user_id,
             }
-            ok, result = api_post("/notebooks", payload)
+            ok, result, _ = api_post("/notebooks", payload)
             if ok:
                 st.success("Notebook created.")
                 st.json(result)
@@ -149,7 +284,7 @@ elif page == "Notebooks":
     if st.button("Refresh notebooks"):
         st.rerun()
 
-    ok, result = fetch_notebooks(owner_user_id)
+    ok, result = fetch_notebooks()
     if ok:
         notebooks = result if isinstance(result, list) else []
         if notebooks:
@@ -170,72 +305,71 @@ elif page == "Notebooks":
                 st.session_state["page"] = "Notebooks"
                 st.rerun()
 
-            with st.expander("Manage selected notebook"):
-                with st.form("rename_notebook_form"):
-                    renamed_title = st.text_input(
-                        "New notebook title",
-                        value=selected.get("title", ""),
-                    )
-                    rename_submitted = st.form_submit_button("Rename notebook")
-
-                if rename_submitted:
-                    if not renamed_title.strip():
-                        st.error("Notebook title is required.")
-                    else:
-                        payload = {
-                            "owner_user_id": owner_user_id,
-                            "title": renamed_title.strip(),
-                        }
-                        ok, rename_result = api_patch(f"/notebooks/{selected['id']}", payload)
-                        if ok:
-                            st.success("Notebook renamed.")
-                            if st.session_state.get("selected_notebook_id") == selected["id"]:
-                                st.session_state["selected_notebook_title"] = renamed_title.strip()
-                            st.rerun()
-                        else:
-                            st.error("Failed to rename notebook.")
-                            st.code(str(rename_result))
-
-                delete_confirm = st.checkbox(
-                    "Confirm delete selected notebook",
-                    key=f"delete_confirm_{selected['id']}",
-                )
-                if st.button("Delete notebook", key=f"delete_notebook_{selected['id']}"):
-                    if not delete_confirm:
-                        st.error("Please confirm deletion first.")
-                    else:
-                        ok, delete_result = api_delete(
-                            f"/notebooks/{selected['id']}",
-                            params={"owner_user_id": owner_user_id},
-                        )
-                        if ok:
-                            st.success("Notebook deleted.")
-                            if st.session_state.get("selected_notebook_id") == selected["id"]:
-                                st.session_state.pop("selected_notebook_id", None)
-                                st.session_state.pop("selected_notebook_title", None)
-                            st.rerun()
-                        else:
-                            st.error("Failed to delete notebook.")
-                            st.code(str(delete_result))
-
             selected_notebook_id = st.session_state.get("selected_notebook_id")
             selected_notebook_title = st.session_state.get("selected_notebook_title")
             if selected_notebook_id:
                 st.divider()
                 st.subheader(f"Notebook: {selected_notebook_title}")
 
+                manage_left, manage_right = st.columns(2)
+                with manage_left:
+                    with st.form("rename_notebook_form"):
+                        renamed_title = st.text_input(
+                            "Rename notebook",
+                            value=selected_notebook_title or "",
+                            key=f"rename_notebook_title_{selected_notebook_id}",
+                        )
+                        rename_submitted = st.form_submit_button("Save name")
+                    if rename_submitted:
+                        if not renamed_title.strip():
+                            st.error("Notebook title cannot be empty.")
+                        else:
+                            ok, rename_result, _ = api_patch(
+                                f"/notebooks/{selected_notebook_id}",
+                                {"title": renamed_title.strip()},
+                            )
+                            if ok and isinstance(rename_result, dict):
+                                st.success("Notebook renamed.")
+                                st.session_state["selected_notebook_title"] = rename_result.get(
+                                    "title", renamed_title.strip()
+                                )
+                                st.rerun()
+                            st.error("Failed to rename notebook.")
+                            st.code(str(rename_result))
+
+                with manage_right:
+                    with st.form("delete_notebook_form"):
+                        confirm_delete = st.checkbox(
+                            "I understand this permanently deletes this notebook and its data.",
+                            value=False,
+                        )
+                        delete_submitted = st.form_submit_button("Delete notebook")
+                    if delete_submitted:
+                        if not confirm_delete:
+                            st.error("Please confirm deletion first.")
+                        else:
+                            ok, delete_result, _ = api_delete(f"/notebooks/{selected_notebook_id}")
+                            if ok:
+                                st.success("Notebook deleted.")
+                                st.session_state.pop("selected_notebook_id", None)
+                                st.session_state.pop("selected_notebook_title", None)
+                                st.session_state.pop("selected_thread_id", None)
+                                st.rerun()
+                            st.error("Failed to delete notebook.")
+                            st.code(str(delete_result))
+
                 source_tab, chat_tab, artifacts_tab = st.tabs(["Sources", "Chat", "Artifacts"])
 
                 with source_tab:
-                    ok, notebook_result = fetch_notebooks(owner_user_id)
+                    ok, notebook_result = fetch_notebooks()
                     if not ok:
                         st.error("Failed to load notebooks.")
                         st.code(str(notebook_result))
                     else:
-                        notebooks_for_owner = notebook_result if isinstance(notebook_result, list) else []
+                        notebooks_for_user = notebook_result if isinstance(notebook_result, list) else []
                         notebook_ids = {
                             n["id"]
-                            for n in notebooks_for_owner
+                            for n in notebooks_for_user
                             if isinstance(n, dict) and "id" in n
                         }
                         if selected_notebook_id not in notebook_ids:
@@ -272,11 +406,9 @@ elif page == "Notebooks":
                                     resolved_original_name = resolved_original_name or uploaded_file.name
                                     resolved_title = resolved_title or uploaded_file.name
 
-                                    form_data = {
-                                        "owner_user_id": str(owner_user_id),
-                                        "title": resolved_title,
-                                        "status": source_status,
-                                    }
+                                    form_data: dict[str, str | int] = {"status": source_status}
+                                    if resolved_title:
+                                        form_data["title"] = resolved_title
                                     files_payload = {
                                         "file": (
                                             uploaded_file.name,
@@ -284,7 +416,7 @@ elif page == "Notebooks":
                                             uploaded_file.type or "application/octet-stream",
                                         )
                                     }
-                                    ok, create_result = api_post_multipart(
+                                    ok, create_result, _ = api_post_multipart(
                                         f"/notebooks/{selected_notebook_id}/sources/upload",
                                         data=form_data,
                                         files=files_payload,
@@ -303,7 +435,6 @@ elif page == "Notebooks":
 
                                 if source_type not in file_like_types:
                                     payload = {
-                                        "owner_user_id": owner_user_id,
                                         "type": source_type,
                                         "title": resolved_title,
                                         "original_name": resolved_original_name,
@@ -311,7 +442,7 @@ elif page == "Notebooks":
                                         "storage_path": storage_path or None,
                                         "status": source_status,
                                     }
-                                    ok, create_result = api_post(
+                                    ok, create_result, _ = api_post(
                                         f"/notebooks/{selected_notebook_id}/sources", payload
                                     )
                                     if ok:
@@ -324,9 +455,8 @@ elif page == "Notebooks":
                             if st.button("Refresh sources"):
                                 st.rerun()
 
-                            ok, source_result = api_get(
+                            ok, source_result, _ = api_get(
                                 f"/notebooks/{selected_notebook_id}/sources",
-                                params={"owner_user_id": owner_user_id},
                             )
                             if ok:
                                 sources = source_result if isinstance(source_result, list) else []
@@ -341,9 +471,8 @@ elif page == "Notebooks":
 
                 with chat_tab:
                     st.write("Chat threads")
-                    ok, thread_result = api_get(
+                    ok, thread_result, _ = api_get(
                         f"/notebooks/{selected_notebook_id}/threads",
-                        params={"owner_user_id": owner_user_id},
                     )
                     threads = thread_result if (ok and isinstance(thread_result, list)) else []
 
@@ -353,13 +482,12 @@ elif page == "Notebooks":
 
                     if create_thread_submitted:
                         payload = {
-                            "owner_user_id": owner_user_id,
                             "title": thread_title.strip() or None,
                         }
-                        ok, create_thread_result = api_post(
+                        ok, create_thread_result, _ = api_post(
                             f"/notebooks/{selected_notebook_id}/threads", payload
                         )
-                        if ok:
+                        if ok and isinstance(create_thread_result, dict):
                             st.success("Thread created.")
                             st.session_state["selected_thread_id"] = create_thread_result["id"]
                             st.rerun()
@@ -388,9 +516,9 @@ elif page == "Notebooks":
                         selected_thread_id = thread_options[selected_thread_label]
                         st.session_state["selected_thread_id"] = selected_thread_id
 
-                        ok, message_result = api_get(
+                        ok, message_result, _ = api_get(
                             f"/threads/{selected_thread_id}/messages",
-                            params={"notebook_id": selected_notebook_id, "owner_user_id": owner_user_id},
+                            params={"notebook_id": selected_notebook_id},
                         )
                         if ok and isinstance(message_result, list):
                             st.write("Messages")
@@ -414,15 +542,14 @@ elif page == "Notebooks":
                                 st.error("Question cannot be empty.")
                             else:
                                 payload = {
-                                    "owner_user_id": owner_user_id,
                                     "question": question.strip(),
                                     "top_k": 5,
                                 }
-                                ok, chat_result = api_post(
+                                ok, chat_result, _ = api_post(
                                     f"/threads/{selected_thread_id}/chat?notebook_id={selected_notebook_id}",
                                     payload,
                                 )
-                                if ok:
+                                if ok and isinstance(chat_result, dict):
                                     st.success("Response generated.")
                                     citations = chat_result.get("citations", [])
                                     if citations:
@@ -436,163 +563,202 @@ elif page == "Notebooks":
                         st.info("Create a thread to start chatting.")
 
                 with artifacts_tab:
-                    st.write("Generate and manage artifacts")
-                    quiz_tab, report_tab, podcast_tab, library_tab = st.tabs(["Quiz", "Report", "Podcast", "Library"])
+                    st.write("Artifact generation")
 
-                    with quiz_tab:
+                    report_col, quiz_col, podcast_col = st.columns(3)
+
+                    with report_col:
+                        with st.form("generate_report_form"):
+                            report_title = st.text_input(
+                                "Report title (optional)",
+                                key=f"report_title_{selected_notebook_id}",
+                            )
+                            report_detail = st.selectbox(
+                                "Detail level",
+                                options=["short", "medium", "long"],
+                                index=1,
+                                key=f"report_detail_{selected_notebook_id}",
+                            )
+                            report_topic = st.text_input(
+                                "Topic focus (optional)",
+                                key=f"report_topic_{selected_notebook_id}",
+                            )
+                            report_submitted = st.form_submit_button("Generate report")
+
+                        if report_submitted:
+                            payload = {
+                                "title": report_title.strip() or None,
+                                "detail_level": report_detail,
+                                "topic_focus": report_topic.strip() or None,
+                            }
+                            ok, report_result, _ = api_post(
+                                f"/notebooks/{selected_notebook_id}/artifacts/report",
+                                payload,
+                            )
+                            if ok:
+                                st.success("Report generated.")
+                                st.rerun()
+                            else:
+                                st.error("Report generation failed.")
+                                st.code(str(report_result))
+
+                    with quiz_col:
                         with st.form("generate_quiz_form"):
-                            quiz_title = st.text_input("Quiz title (optional)")
-                            quiz_num_questions = st.number_input(
-                                "Number of questions", min_value=1, max_value=20, value=5, step=1
+                            quiz_title = st.text_input(
+                                "Quiz title (optional)",
+                                key=f"quiz_title_{selected_notebook_id}",
+                            )
+                            quiz_questions = st.number_input(
+                                "Questions",
+                                min_value=1,
+                                max_value=20,
+                                value=5,
+                                step=1,
+                                key=f"quiz_questions_{selected_notebook_id}",
                             )
                             quiz_difficulty = st.selectbox(
-                                "Quiz difficulty", options=["easy", "medium", "hard"], index=1
+                                "Difficulty",
+                                options=["easy", "medium", "hard"],
+                                index=1,
+                                key=f"quiz_difficulty_{selected_notebook_id}",
                             )
-                            quiz_topic_focus = st.text_input("Quiz topic focus (optional)")
-                            generate_quiz_submitted = st.form_submit_button("Generate quiz")
+                            quiz_topic = st.text_input(
+                                "Topic focus (optional)",
+                                key=f"quiz_topic_{selected_notebook_id}",
+                            )
+                            quiz_submitted = st.form_submit_button("Generate quiz")
 
-                        if generate_quiz_submitted:
+                        if quiz_submitted:
                             payload = {
-                                "owner_user_id": owner_user_id,
                                 "title": quiz_title.strip() or None,
-                                "num_questions": int(quiz_num_questions),
+                                "num_questions": int(quiz_questions),
                                 "difficulty": quiz_difficulty,
-                                "topic_focus": quiz_topic_focus.strip() or None,
+                                "topic_focus": quiz_topic.strip() or None,
                             }
-                            ok, quiz_result = api_post(
+                            ok, quiz_result, _ = api_post(
                                 f"/notebooks/{selected_notebook_id}/artifacts/quiz",
                                 payload,
                             )
                             if ok:
                                 st.success("Quiz generated.")
-                                st.json(quiz_result)
                                 st.rerun()
                             else:
-                                st.error("Failed to generate quiz.")
+                                st.error("Quiz generation failed.")
                                 st.code(str(quiz_result))
 
-                    with report_tab:
-                        with st.form("generate_report_form"):
-                            report_title = st.text_input("Report title (optional)")
-                            report_topic_focus = st.text_input("Topic focus (optional)")
-                            generate_report_submitted = st.form_submit_button("Generate report")
-
-                        if generate_report_submitted:
-                            payload = {
-                                "owner_user_id": owner_user_id,
-                                "title": report_title.strip() or None,
-                                "topic_focus": report_topic_focus.strip() or None,
-                            }
-                            ok, report_result = api_post(
-                                f"/notebooks/{selected_notebook_id}/artifacts/report",
-                                payload,
-                            )
-                            if ok:
-                                st.success("Report request completed.")
-                                st.json(report_result)
-                                st.rerun()
-                            else:
-                                st.error("Failed to generate report.")
-                                st.code(str(report_result))
-
-                    with podcast_tab:
+                    with podcast_col:
                         with st.form("generate_podcast_form"):
-                            podcast_title = st.text_input("Podcast title (optional)")
+                            podcast_title = st.text_input(
+                                "Podcast title (optional)",
+                                key=f"podcast_title_{selected_notebook_id}",
+                            )
                             podcast_duration = st.selectbox(
-                                "Podcast duration",
+                                "Duration",
                                 options=["5min", "10min", "15min", "20min"],
                                 index=0,
+                                key=f"podcast_duration_{selected_notebook_id}",
                             )
-                            podcast_topic_focus = st.text_input("Podcast topic focus (optional)")
-                            generate_podcast_submitted = st.form_submit_button("Generate podcast")
+                            podcast_topic = st.text_input(
+                                "Topic focus (optional)",
+                                key=f"podcast_topic_{selected_notebook_id}",
+                            )
+                            podcast_submitted = st.form_submit_button("Generate podcast")
 
-                        if generate_podcast_submitted:
+                        if podcast_submitted:
                             payload = {
-                                "owner_user_id": owner_user_id,
                                 "title": podcast_title.strip() or None,
                                 "duration": podcast_duration,
-                                "topic_focus": podcast_topic_focus.strip() or None,
+                                "topic_focus": podcast_topic.strip() or None,
                             }
-                            ok, podcast_result = api_post(
+                            ok, podcast_result, _ = api_post(
                                 f"/notebooks/{selected_notebook_id}/artifacts/podcast",
                                 payload,
                             )
                             if ok:
                                 st.success("Podcast generation started.")
-                                st.json(podcast_result)
                                 st.rerun()
                             else:
-                                st.error("Failed to start podcast generation.")
+                                st.error("Podcast generation failed.")
                                 st.code(str(podcast_result))
 
-                    with library_tab:
-                        if st.button("Refresh artifacts"):
-                            st.rerun()
+                    st.divider()
+                    if st.button("Refresh artifacts"):
+                        st.rerun()
 
-                        ok, artifacts_result = api_get(
-                            f"/notebooks/{selected_notebook_id}/artifacts",
-                            params={"owner_user_id": owner_user_id},
-                        )
-                        if not ok:
-                            st.error("Failed to fetch artifacts.")
-                            st.code(str(artifacts_result))
-                        else:
-                            artifacts = artifacts_result if isinstance(artifacts_result, list) else []
-                            if not artifacts:
-                                st.info("No artifacts yet.")
-                            else:
-                                st.dataframe(artifacts, use_container_width=True)
-                                artifact_options = {
-                                    f"{a['id']} - {a.get('type', 'unknown')} ({a.get('status', 'n/a')})": a
-                                    for a in artifacts
-                                    if isinstance(a, dict) and "id" in a
-                                }
-                                selected_artifact_label = st.selectbox(
-                                    "Select artifact",
-                                    options=list(artifact_options.keys()),
-                                    key="selected_artifact_label",
+                    ok, artifact_result, _ = api_get(f"/notebooks/{selected_notebook_id}/artifacts")
+                    if ok and isinstance(artifact_result, list):
+                        artifacts = artifact_result
+                        if artifacts:
+                            st.dataframe(artifacts, use_container_width=True)
+                            artifact_options = {
+                                f"{a['id']} - {a.get('type', 'unknown')} - {a.get('status', '')}": a
+                                for a in artifacts
+                                if isinstance(a, dict) and "id" in a
+                            }
+                            selected_artifact_label = st.selectbox(
+                                "Select artifact",
+                                options=list(artifact_options.keys()),
+                                key="selected_artifact_label",
+                            )
+                            selected_artifact = artifact_options[selected_artifact_label]
+                            artifact_id = int(selected_artifact["id"])
+                            artifact_type = str(selected_artifact.get("type", ""))
+                            artifact_status = str(selected_artifact.get("status", ""))
+                            artifact_content = selected_artifact.get("content")
+
+                            if artifact_type == "report" and artifact_content:
+                                st.markdown("### Report Preview")
+                                st.markdown(str(artifact_content))
+                                st.download_button(
+                                    "Download report (.md)",
+                                    data=str(artifact_content).encode("utf-8"),
+                                    file_name=f"report_{artifact_id}.md",
+                                    mime="text/markdown",
                                 )
-                                selected_artifact = artifact_options[selected_artifact_label]
-                                artifact_id = selected_artifact["id"]
-                                artifact_type = selected_artifact.get("type")
-                                artifact_status = selected_artifact.get("status")
-                                backend_base = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
-
+                            elif artifact_type == "quiz" and artifact_content:
+                                st.markdown("### Quiz Preview")
+                                st.markdown(str(artifact_content))
+                                st.download_button(
+                                    "Download quiz (.md)",
+                                    data=str(artifact_content).encode("utf-8"),
+                                    file_name=f"quiz_{artifact_id}.md",
+                                    mime="text/markdown",
+                                )
+                            elif artifact_type == "podcast":
+                                if artifact_content:
+                                    st.markdown("### Transcript")
+                                    st.markdown(str(artifact_content))
+                                    st.download_button(
+                                        "Download transcript (.md)",
+                                        data=str(artifact_content).encode("utf-8"),
+                                        file_name=f"podcast_transcript_{artifact_id}.md",
+                                        mime="text/markdown",
+                                    )
                                 if artifact_status == "ready":
-                                    if artifact_type == "report":
-                                        content = selected_artifact.get("content") or ""
-                                        if content:
-                                            st.markdown(content)
-                                        st.link_button(
-                                            "Download report (.md)",
-                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/download",
+                                    ok_audio, audio_result, _ = api_get_bytes(
+                                        f"/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/audio"
+                                    )
+                                    if ok_audio and isinstance(audio_result, bytes):
+                                        st.audio(audio_result, format="audio/mp3")
+                                        st.download_button(
+                                            "Download podcast (.mp3)",
+                                            data=audio_result,
+                                            file_name=f"podcast_{artifact_id}.mp3",
+                                            mime="audio/mpeg",
                                         )
-                                    elif artifact_type == "podcast":
-                                        content = selected_artifact.get("content") or ""
-                                        if content:
-                                            st.markdown(content)
-                                        st.audio(
-                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/audio"
-                                        )
-                                        st.link_button(
-                                            "Download podcast transcript (.md)",
-                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/transcript",
-                                        )
-                                    elif artifact_type == "quiz":
-                                        content = selected_artifact.get("content") or ""
-                                        if content:
-                                            st.markdown(content)
-                                        st.link_button(
-                                            "Download quiz (.md)",
-                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/download",
-                                        )
+                                    else:
+                                        st.error(f"Unable to load audio: {audio_result}")
                                 else:
-                                    st.info(f"Artifact status: {artifact_status}")
-                                    error_message = selected_artifact.get("error_message")
-                                    if error_message:
-                                        st.error(f"Artifact error: {error_message}")
+                                    st.info(f"Podcast status: {artifact_status}")
+                            else:
+                                st.info("Select an artifact to preview.")
+                        else:
+                            st.info("No artifacts generated yet.")
+                    else:
+                        st.error("Failed to fetch artifacts.")
+                        st.code(str(artifact_result))
         else:
-            st.info("No notebooks yet for this user.")
+            st.info("No notebooks yet.")
     else:
         st.error("Failed to fetch notebooks.")
         st.code(str(result))

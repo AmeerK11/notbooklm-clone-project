@@ -24,6 +24,42 @@ def get_or_create_user(
     return user
 
 
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.get(User, user_id)
+
+
+def get_or_create_user_by_email(
+    db: Session,
+    email: str,
+    display_name: str | None = None,
+    avatar_url: str | None = None,
+) -> User:
+    normalized_email = email.strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
+    if user:
+        changed = False
+        if display_name and user.display_name != display_name:
+            user.display_name = display_name
+            changed = True
+        if avatar_url and user.avatar_url != avatar_url:
+            user.avatar_url = avatar_url
+            changed = True
+        if changed:
+            db.commit()
+            db.refresh(user)
+        return user
+
+    user = User(
+        email=normalized_email,
+        display_name=display_name,
+        avatar_url=avatar_url,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def create_notebook(db: Session, owner_user_id: int, title: str) -> Notebook:
     notebook = Notebook(owner_user_id=owner_user_id, title=title)
     db.add(notebook)
@@ -49,30 +85,16 @@ def get_notebook_for_user(db: Session, notebook_id: int, owner_user_id: int) -> 
     )
 
 
-def update_notebook_title(
-    db: Session,
-    notebook_id: int,
-    owner_user_id: int,
-    title: str,
-) -> Notebook | None:
-    notebook = get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
-    if notebook is None:
-        return None
-
+def update_notebook_title(db: Session, notebook: Notebook, title: str) -> Notebook:
     notebook.title = title
     db.commit()
     db.refresh(notebook)
     return notebook
 
 
-def delete_notebook(db: Session, notebook_id: int, owner_user_id: int) -> bool:
-    notebook = get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
-    if notebook is None:
-        return False
-
+def delete_notebook(db: Session, notebook: Notebook) -> None:
     db.delete(notebook)
     db.commit()
-    return True
 
 
 def create_source(
@@ -235,18 +257,16 @@ def update_artifact(
         return None
     
     artifact.status = status
-    if content:
+    if content is not None:
         artifact.content = content
-    if file_path:
+    if file_path is not None:
         artifact.file_path = file_path
-    if error_message:
+    if error_message is not None:
         artifact.error_message = error_message
     if metadata is not None:
-        existing = artifact.artifact_metadata or {}
-        if isinstance(existing, dict):
-            artifact.artifact_metadata = {**existing, **metadata}
-        else:
-            artifact.artifact_metadata = metadata
+        merged = dict(artifact.artifact_metadata or {})
+        merged.update(metadata)
+        artifact.artifact_metadata = merged
     if status == "ready":
         artifact.generated_at = datetime.utcnow()
     

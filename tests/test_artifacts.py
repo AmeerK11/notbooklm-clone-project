@@ -1,7 +1,7 @@
 """
-Unit tests for quiz, report, and podcast artifact generators.
+Unit tests for quiz and podcast artifact generators.
 
-All external dependencies (LLM, ChromaDB, TTS) are mocked so these tests
+All external dependencies (OpenAI, ChromaDB, TTS) are mocked so these tests
 run without network access or API keys.
 """
 from __future__ import annotations
@@ -19,7 +19,6 @@ sys.path.insert(0, str(ROOT))
 
 from src.artifacts.quiz_generator import QuizGenerator
 from src.artifacts.podcast_generator import PodcastGenerator
-from src.artifacts.report_generator import ReportGenerator
 
 # ── Shared fixtures ───────────────────────────────────────────────────────────
 
@@ -50,8 +49,6 @@ MOCK_PODCAST_LLM_RESPONSE = {
         {"speaker": "Jordan", "text": "The core idea is training models on data."},
     ]
 }
-
-MOCK_REPORT_MARKDOWN = "# Notebook Report\n\n## Executive Summary\nMachine learning overview."
 
 MOCK_CHROMA_RESULTS = [
     ("chunk-1", 0.85, {"document": "Machine learning is a subset of AI.", "metadata": {}}),
@@ -84,13 +81,16 @@ class TestQuizGenerator:
         mock_store = MagicMock()
         mock_store.query.return_value = MOCK_CHROMA_RESULTS
 
-        env = {"STORAGE_BASE_DIR": str(tmp_path / "data")}
+        mock_llm_resp = _make_openai_chat_response(MOCK_QUIZ_LLM_RESPONSE)
+
+        env = {"STORAGE_BASE_DIR": str(tmp_path / "data"), "OPENAI_API_KEY": "test-key"}
         with patch.dict(os.environ, env):
             with patch("src.artifacts.quiz_generator.ChromaAdapter", return_value=mock_store):
-                with patch(
-                    "src.artifacts.quiz_generator.generate_chat_completion",
-                    return_value=json.dumps(MOCK_QUIZ_LLM_RESPONSE),
-                ):
+                with patch("src.artifacts.quiz_generator.OpenAI") as mock_openai_cls:
+                    mock_client = MagicMock()
+                    mock_client.chat.completions.create.return_value = mock_llm_resp
+                    mock_openai_cls.return_value = mock_client
+
                     gen = QuizGenerator()
                     result = gen.generate_quiz(
                         user_id="1",
@@ -107,10 +107,11 @@ class TestQuizGenerator:
 
     def test_generate_quiz_no_chroma_dir_returns_error(self, tmp_path):
         """Returns error dict when the chroma directory does not exist."""
-        env = {"STORAGE_BASE_DIR": str(tmp_path / "nonexistent")}
+        env = {"STORAGE_BASE_DIR": str(tmp_path / "nonexistent"), "OPENAI_API_KEY": "test-key"}
         with patch.dict(os.environ, env):
-            gen = QuizGenerator()
-            result = gen.generate_quiz(user_id="1", notebook_id="1")
+            with patch("src.artifacts.quiz_generator.OpenAI"):
+                gen = QuizGenerator()
+                result = gen.generate_quiz(user_id="1", notebook_id="1")
 
         assert "error" in result
         assert result["questions"] == []
@@ -122,11 +123,12 @@ class TestQuizGenerator:
         mock_store = MagicMock()
         mock_store.query.return_value = []
 
-        env = {"STORAGE_BASE_DIR": str(tmp_path / "data")}
+        env = {"STORAGE_BASE_DIR": str(tmp_path / "data"), "OPENAI_API_KEY": "test-key"}
         with patch.dict(os.environ, env):
             with patch("src.artifacts.quiz_generator.ChromaAdapter", return_value=mock_store):
-                gen = QuizGenerator()
-                result = gen.generate_quiz(user_id="1", notebook_id="1")
+                with patch("src.artifacts.quiz_generator.OpenAI"):
+                    gen = QuizGenerator()
+                    result = gen.generate_quiz(user_id="1", notebook_id="1")
 
         assert "error" in result
 
@@ -137,40 +139,48 @@ class TestQuizGenerator:
         mock_store = MagicMock()
         mock_store.query.return_value = MOCK_CHROMA_RESULTS
 
+        mock_llm_resp = _make_openai_chat_response(
+            {"questions": [MOCK_QUIZ_LLM_RESPONSE["questions"][0]] * 3}
+        )
+
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "data"),
+            "OPENAI_API_KEY": "test-key",
             "DEFAULT_QUIZ_QUESTIONS": "3",
             "DEFAULT_QUIZ_DIFFICULTY": "hard",
         }
         with patch.dict(os.environ, env):
             with patch("src.artifacts.quiz_generator.ChromaAdapter", return_value=mock_store):
-                with patch(
-                    "src.artifacts.quiz_generator.generate_chat_completion",
-                    return_value=json.dumps({"questions": [MOCK_QUIZ_LLM_RESPONSE["questions"][0]] * 3}),
-                ):
+                with patch("src.artifacts.quiz_generator.OpenAI") as mock_openai_cls:
+                    mock_client = MagicMock()
+                    mock_client.chat.completions.create.return_value = mock_llm_resp
+                    mock_openai_cls.return_value = mock_client
+
                     gen = QuizGenerator()
                     result = gen.generate_quiz(user_id="1", notebook_id="1")
 
         assert result["metadata"]["num_questions"] == 3
         assert result["metadata"]["difficulty"] == "hard"
 
-    def test_to_markdown_and_save_quiz_creates_markdown_file(self, tmp_path):
-        """Quiz markdown includes answer key and is saved as .md."""
+    def test_save_quiz_creates_markdown_file(self, tmp_path):
+        """save_quiz writes a markdown file with questions and answer key."""
         quiz_data = {
             "questions": MOCK_QUIZ_LLM_RESPONSE["questions"],
             "metadata": {"num_questions": 1, "difficulty": "easy"},
         }
 
-        gen = QuizGenerator()
-        markdown = gen.to_markdown(quiz_data, title="ML Quiz")
-        saved_path = gen.save_quiz(markdown, "1", "1")
+        with patch("src.artifacts.quiz_generator.OpenAI"):
+            gen = QuizGenerator()
+            markdown = gen.format_quiz_markdown(quiz_data, title="Quiz")
+            saved_path = gen.save_quiz(markdown, "1", "1")
 
         p = pathlib.Path(saved_path)
         assert p.exists()
         assert p.suffix == ".md"
-        saved_text = p.read_text(encoding="utf-8")
-        assert "## Questions" in saved_text
-        assert "## Answer Key" in saved_text
+        saved = p.read_text(encoding="utf-8")
+        assert "## Questions" in saved
+        assert "## Answer Key" in saved
+        assert "1. **B**" in saved
 
 
 # ── PodcastGenerator tests ────────────────────────────────────────────────────
@@ -196,6 +206,8 @@ class TestPodcastGenerator:
         mock_store = MagicMock()
         mock_store.query.return_value = MOCK_CHROMA_RESULTS
 
+        mock_llm_resp = _make_openai_chat_response(MOCK_PODCAST_LLM_RESPONSE)
+
         fake_audio = str(tmp_path / "podcast.mp3")
 
         env = {
@@ -208,10 +220,11 @@ class TestPodcastGenerator:
                 with patch(
                     "src.artifacts.podcast_generator.ChromaAdapter", return_value=mock_store
                 ):
-                    with patch(
-                        "src.artifacts.podcast_generator.generate_chat_completion",
-                        return_value=json.dumps(MOCK_PODCAST_LLM_RESPONSE),
-                    ):
+                    with patch("src.artifacts.podcast_generator.OpenAI") as mock_openai_cls:
+                        mock_client = MagicMock()
+                        mock_client.chat.completions.create.return_value = mock_llm_resp
+                        mock_openai_cls.return_value = mock_client
+
                         gen = PodcastGenerator()
 
                         with patch.object(gen, "_synthesize_segments", return_value=[fake_audio]):
@@ -236,49 +249,13 @@ class TestPodcastGenerator:
         }
         with patch.dict(os.environ, env):
             with patch("src.artifacts.tts_adapter.EdgeTTS"):
-                gen = PodcastGenerator()
-                result = gen.generate_podcast(user_id="1", notebook_id="1")
+                with patch("src.artifacts.podcast_generator.OpenAI"):
+                    gen = PodcastGenerator()
+                    result = gen.generate_podcast(user_id="1", notebook_id="1")
 
         assert "error" in result
         assert result["transcript"] == []
 
-
-class TestReportGenerator:
-    def test_generate_report_returns_markdown(self, tmp_path):
-        """Report generator returns markdown when context and LLM are available."""
-        _chroma_dir(tmp_path)
-
-        mock_store = MagicMock()
-        mock_store.query.return_value = MOCK_CHROMA_RESULTS
-
-        env = {"STORAGE_BASE_DIR": str(tmp_path / "data"), "OPENAI_API_KEY": "test-key"}
-        with patch.dict(os.environ, env):
-            with patch("src.artifacts.report_generator.ChromaAdapter", return_value=mock_store):
-                with patch(
-                    "src.artifacts.report_generator.generate_chat_completion",
-                    return_value=MOCK_REPORT_MARKDOWN,
-                ):
-                    gen = ReportGenerator()
-                    result = gen.generate_report(user_id="1", notebook_id="1", title="My Report")
-
-        assert "error" not in result
-        assert result["markdown"].startswith("# Notebook Report")
-        assert result["metadata"]["notebook_id"] == "1"
-
-    def test_save_report_creates_markdown_file(self, tmp_path):
-        """save_report writes a .md file under the reports artifact folder."""
-        env = {"OPENAI_API_KEY": "test-key"}
-        with patch.dict(os.environ, env):
-            gen = ReportGenerator()
-            saved_path = gen.save_report(MOCK_REPORT_MARKDOWN, "1", "1")
-
-        p = pathlib.Path(saved_path)
-        assert p.exists()
-        assert p.suffix == ".md"
-        assert p.read_text(encoding="utf-8").startswith("# Notebook Report")
-
-
-class TestPodcastGeneratorMore:
     def test_generate_podcast_empty_vectorstore_returns_error(self, tmp_path):
         """Returns error dict when vectorstore has no chunks."""
         _chroma_dir(tmp_path)
@@ -296,36 +273,34 @@ class TestPodcastGeneratorMore:
                 with patch(
                     "src.artifacts.podcast_generator.ChromaAdapter", return_value=mock_store
                 ):
-                    gen = PodcastGenerator()
-                    result = gen.generate_podcast(user_id="1", notebook_id="1")
+                    with patch("src.artifacts.podcast_generator.OpenAI"):
+                        gen = PodcastGenerator()
+                        result = gen.generate_podcast(user_id="1", notebook_id="1")
 
         assert "error" in result
 
     def test_save_transcript_creates_markdown_file(self, tmp_path):
-        """save_transcript writes a markdown transcript file at the expected path."""
+        """save_transcript writes markdown transcript at the expected path."""
         podcast_data = {
             "transcript": MOCK_PODCAST_LLM_RESPONSE["segments"],
             "audio_path": str(tmp_path / "podcast.mp3"),
-            "metadata": {
-                "duration_target": "5min",
-                "tts_provider": "edge",
-                "generated_at": "2026-01-01T00:00:00",
-            },
+            "metadata": {"duration_target": "5min"},
         }
 
         env = {"OPENAI_API_KEY": "test-key", "TTS_PROVIDER": "edge"}
         with patch.dict(os.environ, env):
             with patch("src.artifacts.tts_adapter.EdgeTTS"):
-                gen = PodcastGenerator()
-                markdown = gen.to_markdown(podcast_data, title="Podcast Transcript")
-                saved_path = gen.save_transcript(markdown, "1", "1")
+                with patch("src.artifacts.podcast_generator.OpenAI"):
+                    gen = PodcastGenerator()
+                    saved_path = gen.save_transcript(podcast_data, "1", "1")
 
         p = pathlib.Path(saved_path)
         assert p.exists()
         assert p.suffix == ".md"
-        saved_text = p.read_text(encoding="utf-8")
-        assert "# Podcast Transcript" in saved_text
-        assert "## Transcript" in saved_text
+        saved = p.read_text(encoding="utf-8")
+        assert "# Podcast Transcript" in saved
+        assert "## Conversation" in saved
+        assert "**Alex:**" in saved
 
     def test_generate_podcast_topic_focus(self, tmp_path):
         """topic_focus is passed through to metadata."""
@@ -333,6 +308,8 @@ class TestPodcastGeneratorMore:
 
         mock_store = MagicMock()
         mock_store.query.return_value = MOCK_CHROMA_RESULTS
+
+        mock_llm_resp = _make_openai_chat_response(MOCK_PODCAST_LLM_RESPONSE)
 
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "data"),
@@ -344,10 +321,11 @@ class TestPodcastGeneratorMore:
                 with patch(
                     "src.artifacts.podcast_generator.ChromaAdapter", return_value=mock_store
                 ):
-                    with patch(
-                        "src.artifacts.podcast_generator.generate_chat_completion",
-                        return_value=json.dumps(MOCK_PODCAST_LLM_RESPONSE),
-                    ):
+                    with patch("src.artifacts.podcast_generator.OpenAI") as mock_openai_cls:
+                        mock_client = MagicMock()
+                        mock_client.chat.completions.create.return_value = mock_llm_resp
+                        mock_openai_cls.return_value = mock_client
+
                         gen = PodcastGenerator()
                         with patch.object(gen, "_synthesize_segments", return_value=[]):
                             with patch.object(gen, "_combine_audio", return_value=""):
