@@ -91,16 +91,38 @@ def test_url_extraction_with_fallback(tmp_path):
     </html>
     """
 
-    with patch("ingestion.extractors.requests.get") as mock_get:
+    with patch("ingestion.extractors.socket.getaddrinfo") as mock_getaddrinfo, patch(
+        "ingestion.extractors.requests.get"
+    ) as mock_get:
+        mock_getaddrinfo.return_value = [
+            (
+                2,
+                1,
+                6,
+                "",
+                ("93.184.216.34", 0),
+            )
+        ]
         mock_response = MagicMock()
-        mock_response.text = mock_html
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "text/html; charset=utf-8"}
+        mock_response.iter_content.return_value = [mock_html.encode("utf-8")]
+        mock_response.encoding = "utf-8"
+        mock_response.apparent_encoding = "utf-8"
         mock_response.raise_for_status = MagicMock()
+        mock_response.close = MagicMock()
         mock_get.return_value = mock_response
 
         result = extractors.extract_text_from_url("https://example.com/article")
         assert "main content" in result["text"].lower() or "article" in result["text"].lower()
         assert "source" in result
         assert result["source"] == "https://example.com/article"
+
+
+def test_url_extraction_blocks_localhost():
+    """Loopback/local hosts should be blocked to reduce SSRF risk."""
+    with pytest.raises(extractors.URLValidationError):
+        extractors.extract_text_from_url("http://127.0.0.1:8000/health")
 
 
 def test_pdf_extraction_fallback(tmp_path):

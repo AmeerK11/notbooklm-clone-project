@@ -6,7 +6,6 @@ services are required.
 """
 from __future__ import annotations
 
-import json
 import pathlib
 import sys
 from unittest.mock import MagicMock, patch
@@ -97,7 +96,8 @@ class TestQuizEndpoint:
         with patch("app.QuizGenerator") as MockGen:
             mock_gen = MagicMock()
             mock_gen.generate_quiz.return_value = mock_result
-            mock_gen.save_quiz.return_value = "/tmp/quiz.json"
+            mock_gen.format_quiz_markdown.return_value = "# Quiz\n\n## Questions\n\n## Answer Key\n"
+            mock_gen.save_quiz.return_value = "/tmp/quiz.md"
             MockGen.return_value = mock_gen
 
             resp = client.post(
@@ -110,9 +110,8 @@ class TestQuizEndpoint:
         assert data["type"] == "quiz"
         assert data["status"] == "ready"
         assert data["content"] is not None
-        # Content should be valid JSON with the questions
-        content = json.loads(data["content"])
-        assert "questions" in content
+        assert "## Answer Key" in data["content"]
+        assert data["file_path"] == "/tmp/quiz.md"
 
     def test_generate_quiz_no_content_fails(self, client, notebook):
         """POST quiz marks artifact as failed when generator reports no content."""
@@ -160,6 +159,57 @@ class TestQuizEndpoint:
         assert data["title"] == "Hard Quiz"
         assert data["metadata"]["num_questions"] == 7
         assert data["metadata"]["difficulty"] == "hard"
+
+
+# ── Report endpoint tests ─────────────────────────────────────────────────────
+
+
+class TestReportEndpoint:
+    def test_generate_report_success(self, client, notebook):
+        mock_result = {"content": "# Report\n\nGenerated report content.", "detail_level": "medium"}
+        with patch("app.ReportGenerator") as MockGen:
+            mock_gen = MagicMock()
+            mock_gen.generate_report.return_value = mock_result
+            mock_gen.save_report.return_value = "/tmp/report.md"
+            MockGen.return_value = mock_gen
+
+            resp = client.post(
+                f"/notebooks/{notebook.id}/artifacts/report",
+                json={"detail_level": "medium"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "report"
+        assert data["status"] == "ready"
+        assert data["content"].startswith("# Report")
+        assert data["file_path"] == "/tmp/report.md"
+
+    def test_generate_report_no_content_fails(self, client, notebook):
+        with patch("app.ReportGenerator") as MockGen:
+            mock_gen = MagicMock()
+            mock_gen.generate_report.return_value = {"error": "No content found in notebook."}
+            MockGen.return_value = mock_gen
+
+            resp = client.post(
+                f"/notebooks/{notebook.id}/artifacts/report",
+                json={"detail_level": "short"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "failed"
+        assert "No content" in str(resp.json()["error_message"])
+
+    def test_generate_report_invalid_detail_level_400(self, client, notebook):
+        resp = client.post(
+            f"/notebooks/{notebook.id}/artifacts/report",
+            json={"detail_level": "super-long"},
+        )
+        assert resp.status_code == 400
+
+    def test_generate_report_unknown_notebook_404(self, client):
+        resp = client.post("/notebooks/9999/artifacts/report", json={"detail_level": "medium"})
+        assert resp.status_code == 404
 
 
 # ── Podcast endpoint tests ────────────────────────────────────────────────────

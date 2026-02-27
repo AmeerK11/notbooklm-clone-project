@@ -162,22 +162,25 @@ class TestQuizGenerator:
         assert result["metadata"]["num_questions"] == 3
         assert result["metadata"]["difficulty"] == "hard"
 
-    def test_save_quiz_creates_json_file(self, tmp_path):
-        """save_quiz writes a valid JSON file at the expected path."""
+    def test_save_quiz_creates_markdown_file(self, tmp_path):
+        """save_quiz writes a markdown file with questions and answer key."""
         quiz_data = {
             "questions": MOCK_QUIZ_LLM_RESPONSE["questions"],
-            "metadata": {"num_questions": 1},
+            "metadata": {"num_questions": 1, "difficulty": "easy"},
         }
 
         with patch("src.artifacts.quiz_generator.OpenAI"):
             gen = QuizGenerator()
-            saved_path = gen.save_quiz(quiz_data, "1", "1")
+            markdown = gen.format_quiz_markdown(quiz_data, title="Quiz")
+            saved_path = gen.save_quiz(markdown, "1", "1")
 
         p = pathlib.Path(saved_path)
         assert p.exists()
-        saved = json.loads(p.read_text(encoding="utf-8"))
-        assert "questions" in saved
-        assert len(saved["questions"]) == 1
+        assert p.suffix == ".md"
+        saved = p.read_text(encoding="utf-8")
+        assert "## Questions" in saved
+        assert "## Answer Key" in saved
+        assert "1. **B**" in saved
 
 
 # ── PodcastGenerator tests ────────────────────────────────────────────────────
@@ -276,8 +279,8 @@ class TestPodcastGenerator:
 
         assert "error" in result
 
-    def test_save_transcript_creates_json_file(self, tmp_path):
-        """save_transcript writes a valid JSON file at the expected path."""
+    def test_save_transcript_creates_markdown_file(self, tmp_path):
+        """save_transcript writes markdown transcript at the expected path."""
         podcast_data = {
             "transcript": MOCK_PODCAST_LLM_RESPONSE["segments"],
             "audio_path": str(tmp_path / "podcast.mp3"),
@@ -293,9 +296,11 @@ class TestPodcastGenerator:
 
         p = pathlib.Path(saved_path)
         assert p.exists()
-        saved = json.loads(p.read_text(encoding="utf-8"))
-        assert "transcript" in saved
-        assert len(saved["transcript"]) == 4
+        assert p.suffix == ".md"
+        saved = p.read_text(encoding="utf-8")
+        assert "# Podcast Transcript" in saved
+        assert "## Conversation" in saved
+        assert "**Alex:**" in saved
 
     def test_generate_podcast_topic_focus(self, tmp_path):
         """topic_focus is passed through to metadata."""

@@ -1,0 +1,66 @@
+name: Deploy To Hugging Face Space
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -q
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ secrets.HF_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO }}
+          HF_SPACE_BRANCH: ${{ secrets.HF_SPACE_BRANCH }}
+        run: |
+          set -euo pipefail
+          TARGET_BRANCH="${HF_SPACE_BRANCH:-main}"
+          TARGET_SPACE_REPO="${HF_SPACE_REPO:-pbichpur/NotebookLMClone}"
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          git clone "https://huggingface:${HF_TOKEN}@huggingface.co/spaces/${TARGET_SPACE_REPO}" hf-space
+
+          rsync -av --delete \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            ./ hf-space/
+
+          cd hf-space
+          git checkout "${TARGET_BRANCH}" || git checkout -b "${TARGET_BRANCH}"
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes to deploy"
+            exit 0
+          fi
+
+          git commit -m "Sync from GitHub ${GITHUB_SHA}"
+          git push origin "${TARGET_BRANCH}"

@@ -217,17 +217,49 @@ Requirements:
 - Ensure questions are based solely on the provided content
 """
 
-    def save_quiz(self, quiz_data: Dict[str, Any], user_id: str, notebook_id: str) -> str:
-        """Save generated quiz to file."""
+    def format_quiz_markdown(self, quiz_data: Dict[str, Any], title: str | None = None) -> str:
+        """Render quiz questions and answer key as Markdown."""
+        resolved_title = title or "Quiz"
+        questions = quiz_data.get("questions", [])
+        metadata = quiz_data.get("metadata", {}) if isinstance(quiz_data.get("metadata"), dict) else {}
+        difficulty = metadata.get("difficulty")
+
+        lines: list[str] = [f"# {resolved_title}", ""]
+        if difficulty:
+            lines.append(f"Difficulty: **{difficulty}**")
+            lines.append("")
+        lines.append("## Questions")
+        lines.append("")
+
+        for idx, question in enumerate(questions, 1):
+            prompt = str(question.get("question", "")).strip()
+            lines.append(f"### {idx}. {prompt or 'Question'}")
+            options = question.get("options", [])
+            for option in options if isinstance(options, list) else []:
+                lines.append(f"- {str(option)}")
+            lines.append("")
+
+        lines.append("## Answer Key")
+        lines.append("")
+        for idx, question in enumerate(questions, 1):
+            correct = str(question.get("correct_answer", "")).strip() or "N/A"
+            explanation = str(question.get("explanation", "")).strip()
+            lines.append(f"{idx}. **{correct}**")
+            if explanation:
+                lines.append(f"   - {explanation}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def save_quiz(self, quiz_markdown: str, user_id: str, notebook_id: str) -> str:
+        """Save generated quiz Markdown to file."""
         quiz_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/quizzes")
         quiz_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        filename = f"quiz_{timestamp}.json"
+        filename = f"quiz_{timestamp}.md"
         filepath = quiz_dir / filename
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(quiz_data, f, indent=2, ensure_ascii=False)
+        filepath.write_text(quiz_markdown, encoding="utf-8")
 
         print(f"✓ Quiz saved to: {filepath}")
         return str(filepath)
@@ -263,4 +295,5 @@ if __name__ == "__main__":
         print(json.dumps(quiz, indent=2))
 
         if args.save:
-            generator.save_quiz(quiz, args.user, args.notebook)
+            markdown = generator.format_quiz_markdown(quiz, title="Quiz")
+            generator.save_quiz(markdown, args.user, args.notebook)

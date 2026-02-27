@@ -356,21 +356,50 @@ IMPORTANT:
         user_id: str,
         notebook_id: str,
     ) -> str:
-        """Save podcast transcript to file."""
+        """Save podcast transcript Markdown to file."""
         transcript_dir = Path(
             f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/podcasts"
         )
         transcript_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        filename = f"transcript_{timestamp}.json"
+        filename = f"transcript_{timestamp}.md"
         filepath = transcript_dir / filename
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(podcast_data, f, indent=2, ensure_ascii=False)
+        filepath.write_text(self.format_transcript_markdown(podcast_data), encoding="utf-8")
 
         print(f"✓ Transcript saved to: {filepath}")
         return str(filepath)
+
+    def format_transcript_markdown(
+        self,
+        podcast_data: Dict[str, Any],
+        title: str | None = None,
+    ) -> str:
+        """Render podcast transcript as Markdown."""
+        metadata = podcast_data.get("metadata", {}) if isinstance(podcast_data.get("metadata"), dict) else {}
+        transcript = podcast_data.get("transcript", [])
+        resolved_title = title or "Podcast Transcript"
+
+        lines: list[str] = [f"# {resolved_title}", ""]
+        duration = metadata.get("duration_target")
+        if duration:
+            lines.append(f"Target duration: **{duration}**")
+            lines.append("")
+        topic_focus = metadata.get("topic_focus")
+        if topic_focus:
+            lines.append(f"Topic focus: {topic_focus}")
+            lines.append("")
+        lines.append("## Conversation")
+        lines.append("")
+        for segment in transcript if isinstance(transcript, list) else []:
+            speaker = str(segment.get("speaker", "Speaker")).strip() or "Speaker"
+            text = str(segment.get("text", "")).strip()
+            if not text:
+                continue
+            lines.append(f"**{speaker}:** {text}")
+            lines.append("")
+        return "\n".join(lines)
 
 
 # === CLI for testing ===
