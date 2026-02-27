@@ -243,3 +243,27 @@ Notes
 
 - Default stack is local-first (no API keys required). If you enable OpenAI/HF embedding providers or cloud storage, set `OPENAI_API_KEY`, `HF_API_TOKEN`, or cloud credentials as appropriate.
 - For large PDFs requiring OCR, install `tesseract` and the optional Python packages listed in `requirements.txt` comment section.
+
+## Hugging Face Docker Space (Full Stack)
+
+This repo now includes:
+- `Dockerfile`
+- `start_hf.sh` (starts FastAPI on `:8000` and Streamlit on `${PORT:-7860}`)
+- `.dockerignore`
+
+### Deploy Steps
+
+1. Create or switch your Space to **Docker** SDK.
+2. Push this repo to your Space (or use the GitHub Action sync workflow already in `.github/workflows/deploy-hf-space.yml`).
+3. In Space variables/secrets, set at minimum:
+   - `AUTH_MODE=dev` (or `hf_oauth`)
+   - `APP_SESSION_SECRET=<strong-random-secret>`
+   - `STORAGE_BASE_DIR=/data`
+   - `OPENAI_API_KEY=<key>` (if using OpenAI features)
+4. For HF OAuth mode, also set:
+   - `HF_OAUTH_CLIENT_ID`
+   - `HF_OAUTH_CLIENT_SECRET`
+   - `HF_OAUTH_REDIRECT_URI` (your Space callback URL)
+   - `AUTH_SUCCESS_REDIRECT_URL` (your Space URL)
+
+The container exposes Streamlit on port `7860` and points the frontend to the internal backend via `BACKEND_URL=http://127.0.0.1:8000`.
