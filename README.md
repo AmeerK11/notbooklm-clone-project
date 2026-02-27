@@ -1,3 +1,13 @@
+---
+title: NotebookLMClone
+emoji: 📚
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
 # Ingestion Module — NotebookLM Clone (MVP)
 
 This repository contains the ingestion module for a NotebookLM-style project. The ingestion pipeline extracts text from multiple source types, chunks text intelligently, computes embeddings (with provider flexibility), and stores vectors in Chroma for later RAG use.
