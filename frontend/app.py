@@ -152,7 +152,7 @@ elif page == "Notebooks":
                 st.divider()
                 st.subheader(f"Notebook: {selected_notebook_title}")
 
-                source_tab, chat_tab = st.tabs(["Sources", "Chat"])
+                source_tab, chat_tab, artifacts_tab = st.tabs(["Sources", "Chat", "Artifacts"])
 
                 with source_tab:
                     ok, notebook_result = fetch_notebooks(owner_user_id)
@@ -362,6 +362,163 @@ elif page == "Notebooks":
                                     st.code(str(chat_result))
                     else:
                         st.info("Create a thread to start chatting.")
+
+                with artifacts_tab:
+                    st.write("Generate and manage artifacts")
+                    quiz_tab, report_tab, podcast_tab, library_tab = st.tabs(["Quiz", "Report", "Podcast", "Library"])
+
+                    with quiz_tab:
+                        with st.form("generate_quiz_form"):
+                            quiz_title = st.text_input("Quiz title (optional)")
+                            quiz_num_questions = st.number_input(
+                                "Number of questions", min_value=1, max_value=20, value=5, step=1
+                            )
+                            quiz_difficulty = st.selectbox(
+                                "Quiz difficulty", options=["easy", "medium", "hard"], index=1
+                            )
+                            quiz_topic_focus = st.text_input("Quiz topic focus (optional)")
+                            generate_quiz_submitted = st.form_submit_button("Generate quiz")
+
+                        if generate_quiz_submitted:
+                            payload = {
+                                "owner_user_id": owner_user_id,
+                                "title": quiz_title.strip() or None,
+                                "num_questions": int(quiz_num_questions),
+                                "difficulty": quiz_difficulty,
+                                "topic_focus": quiz_topic_focus.strip() or None,
+                            }
+                            ok, quiz_result = api_post(
+                                f"/notebooks/{selected_notebook_id}/artifacts/quiz",
+                                payload,
+                            )
+                            if ok:
+                                st.success("Quiz generated.")
+                                st.json(quiz_result)
+                                st.rerun()
+                            else:
+                                st.error("Failed to generate quiz.")
+                                st.code(str(quiz_result))
+
+                    with report_tab:
+                        with st.form("generate_report_form"):
+                            report_title = st.text_input("Report title (optional)")
+                            report_topic_focus = st.text_input("Topic focus (optional)")
+                            generate_report_submitted = st.form_submit_button("Generate report")
+
+                        if generate_report_submitted:
+                            payload = {
+                                "owner_user_id": owner_user_id,
+                                "title": report_title.strip() or None,
+                                "topic_focus": report_topic_focus.strip() or None,
+                            }
+                            ok, report_result = api_post(
+                                f"/notebooks/{selected_notebook_id}/artifacts/report",
+                                payload,
+                            )
+                            if ok:
+                                st.success("Report request completed.")
+                                st.json(report_result)
+                                st.rerun()
+                            else:
+                                st.error("Failed to generate report.")
+                                st.code(str(report_result))
+
+                    with podcast_tab:
+                        with st.form("generate_podcast_form"):
+                            podcast_title = st.text_input("Podcast title (optional)")
+                            podcast_duration = st.selectbox(
+                                "Podcast duration",
+                                options=["5min", "10min", "15min", "20min"],
+                                index=0,
+                            )
+                            podcast_topic_focus = st.text_input("Podcast topic focus (optional)")
+                            generate_podcast_submitted = st.form_submit_button("Generate podcast")
+
+                        if generate_podcast_submitted:
+                            payload = {
+                                "owner_user_id": owner_user_id,
+                                "title": podcast_title.strip() or None,
+                                "duration": podcast_duration,
+                                "topic_focus": podcast_topic_focus.strip() or None,
+                            }
+                            ok, podcast_result = api_post(
+                                f"/notebooks/{selected_notebook_id}/artifacts/podcast",
+                                payload,
+                            )
+                            if ok:
+                                st.success("Podcast generation started.")
+                                st.json(podcast_result)
+                                st.rerun()
+                            else:
+                                st.error("Failed to start podcast generation.")
+                                st.code(str(podcast_result))
+
+                    with library_tab:
+                        if st.button("Refresh artifacts"):
+                            st.rerun()
+
+                        ok, artifacts_result = api_get(
+                            f"/notebooks/{selected_notebook_id}/artifacts",
+                            params={"owner_user_id": owner_user_id},
+                        )
+                        if not ok:
+                            st.error("Failed to fetch artifacts.")
+                            st.code(str(artifacts_result))
+                        else:
+                            artifacts = artifacts_result if isinstance(artifacts_result, list) else []
+                            if not artifacts:
+                                st.info("No artifacts yet.")
+                            else:
+                                st.dataframe(artifacts, use_container_width=True)
+                                artifact_options = {
+                                    f"{a['id']} - {a.get('type', 'unknown')} ({a.get('status', 'n/a')})": a
+                                    for a in artifacts
+                                    if isinstance(a, dict) and "id" in a
+                                }
+                                selected_artifact_label = st.selectbox(
+                                    "Select artifact",
+                                    options=list(artifact_options.keys()),
+                                    key="selected_artifact_label",
+                                )
+                                selected_artifact = artifact_options[selected_artifact_label]
+                                artifact_id = selected_artifact["id"]
+                                artifact_type = selected_artifact.get("type")
+                                artifact_status = selected_artifact.get("status")
+                                backend_base = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+
+                                if artifact_status == "ready":
+                                    if artifact_type == "report":
+                                        content = selected_artifact.get("content") or ""
+                                        if content:
+                                            st.markdown(content)
+                                        st.link_button(
+                                            "Download report (.md)",
+                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/download",
+                                        )
+                                    elif artifact_type == "podcast":
+                                        content = selected_artifact.get("content") or ""
+                                        if content:
+                                            st.markdown(content)
+                                        st.audio(
+                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/audio"
+                                        )
+                                        st.link_button(
+                                            "Download podcast transcript (.md)",
+                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/transcript",
+                                        )
+                                    elif artifact_type == "quiz":
+                                        content = selected_artifact.get("content") or ""
+                                        if content:
+                                            st.markdown(content)
+                                        st.link_button(
+                                            "Download quiz (.md)",
+                                            f"{backend_base}/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/download",
+                                        )
+                                else:
+                                    st.info(f"Artifact status: {artifact_status}")
+                                    error_message = selected_artifact.get("error_message")
+                                    if error_message:
+                                        st.error(f"Artifact error: {error_message}")
         else:
             st.info("No notebooks yet for this user.")
     else:

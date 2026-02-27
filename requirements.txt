@@ -26,3 +26,5 @@ tqdm
 pytest
 edge-tts
 pydub
+ffmpeg-python
+# NOTE: install ffmpeg system binary separately (e.g., `brew install ffmpeg`)

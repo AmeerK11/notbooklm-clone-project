@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from data.db import get_db, init_db, SessionLocal
 from src.ingestion.service import ingest_source, query_notebook_chunks
 from src.artifacts.quiz_generator import QuizGenerator
 from src.artifacts.podcast_generator import PodcastGenerator
+from src.artifacts.report_generator import ReportGenerator
 from utils.llm_client import LLMConfigError, generate_chat_completion
 from utils.prompt_templates import build_rag_system_prompt, build_rag_user_prompt
 
@@ -121,6 +122,12 @@ class QuizGenerateRequest(BaseModel):
 class PodcastGenerateRequest(BaseModel):
     owner_user_id: int | None = None
     duration: str = Field(default="5min")
+    topic_focus: str | None = None
+    title: str | None = None
+
+
+class ReportGenerateRequest(BaseModel):
+    owner_user_id: int | None = None
     topic_focus: str | None = None
     title: str | None = None
 
@@ -524,14 +531,15 @@ def _run_podcast_background(
         if "error" in result:
             crud.update_artifact(db, artifact_id, status="failed", error_message=result["error"])
         else:
-            transcript_json = json.dumps(result["transcript"], ensure_ascii=False)
-            generator.save_transcript(result, str(user_id), str(notebook_id))
+            transcript_markdown = generator.to_markdown(result, title=f"Podcast – {duration}")
+            transcript_path = generator.save_transcript(transcript_markdown, str(user_id), str(notebook_id))
             crud.update_artifact(
                 db,
                 artifact_id,
                 status="ready",
-                content=transcript_json,
+                content=transcript_markdown,
                 file_path=result.get("audio_path"),
+                metadata={"transcript_path": transcript_path},
             )
     except Exception as exc:
         crud.update_artifact(db, artifact_id, status="failed", error_message=str(exc))
@@ -582,9 +590,15 @@ async def generate_quiz_for_notebook(
     if "error" in result:
         artifact = crud.update_artifact(db, artifact.id, status="failed", error_message=result["error"])
     else:
-        content_json = json.dumps(result, ensure_ascii=False)
-        generator.save_quiz(result, str(owner_user_id), str(notebook_id))
-        artifact = crud.update_artifact(db, artifact.id, status="ready", content=content_json)
+        markdown_content = generator.to_markdown(result, title=payload.title or artifact.title)
+        quiz_path = generator.save_quiz(markdown_content, str(owner_user_id), str(notebook_id))
+        artifact = crud.update_artifact(
+            db,
+            artifact.id,
+            status="ready",
+            content=markdown_content,
+            file_path=quiz_path,
+        )
 
     return _artifact_response(artifact)
 
@@ -620,6 +634,57 @@ def generate_podcast_for_notebook(
         duration=payload.duration,
         topic_focus=payload.topic_focus,
     )
+
+    return _artifact_response(artifact)
+
+
+@notebooks_router.post("/{notebook_id}/artifacts/report", response_model=ArtifactResponse)
+async def generate_report_for_notebook(
+    notebook_id: int,
+    payload: ReportGenerateRequest,
+    db: Session = Depends(get_db),
+) -> ArtifactResponse:
+    owner_user_id = payload.owner_user_id or 1
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.create_artifact(
+        db=db,
+        notebook_id=notebook_id,
+        artifact_type="report",
+        title=payload.title or "Notebook Report",
+        metadata={
+            "topic_focus": payload.topic_focus,
+        },
+    )
+    crud.update_artifact(db, artifact.id, status="processing")
+
+    try:
+        generator = ReportGenerator()
+        result = await run_in_threadpool(
+            generator.generate_report,
+            user_id=str(owner_user_id),
+            notebook_id=str(notebook_id),
+            title=payload.title,
+            topic_focus=payload.topic_focus,
+        )
+    except Exception as exc:
+        crud.update_artifact(db, artifact.id, status="failed", error_message=str(exc))
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}") from exc
+
+    if "error" in result:
+        artifact = crud.update_artifact(db, artifact.id, status="failed", error_message=result["error"])
+    else:
+        markdown_content = str(result.get("markdown", ""))
+        report_path = generator.save_report(markdown_content, str(owner_user_id), str(notebook_id))
+        artifact = crud.update_artifact(
+            db,
+            artifact.id,
+            status="ready",
+            content=markdown_content,
+            file_path=report_path,
+        )
 
     return _artifact_response(artifact)
 
@@ -683,6 +748,69 @@ def download_podcast_audio(
         media_type="audio/mpeg",
         filename=Path(artifact.file_path).name,
     )
+
+
+@notebooks_router.get("/{notebook_id}/artifacts/{artifact_id}/transcript")
+def download_podcast_transcript(
+    notebook_id: int,
+    artifact_id: int,
+    owner_user_id: int = 1,
+    db: Session = Depends(get_db),
+) -> Response:
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.get_artifact(db=db, artifact_id=artifact_id)
+    if artifact is None or artifact.notebook_id != notebook_id:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    if artifact.type != "podcast":
+        raise HTTPException(status_code=400, detail="Artifact is not a podcast.")
+    if artifact.status != "ready":
+        raise HTTPException(status_code=409, detail=f"Podcast not ready yet (status: {artifact.status}).")
+
+    transcript_path: str | None = None
+    if isinstance(artifact.artifact_metadata, dict):
+        raw_path = artifact.artifact_metadata.get("transcript_path")
+        transcript_path = str(raw_path) if raw_path else None
+
+    if transcript_path and Path(transcript_path).exists():
+        return FileResponse(
+            path=transcript_path,
+            media_type="text/markdown",
+            filename=Path(transcript_path).name,
+        )
+
+    if artifact.content:
+        filename = f"podcast_transcript_{artifact.id}.md"
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return Response(content=artifact.content, media_type="text/markdown", headers=headers)
+
+    raise HTTPException(status_code=404, detail="Transcript content not found.")
+
+
+@notebooks_router.get("/{notebook_id}/artifacts/{artifact_id}/download")
+def download_artifact_file(
+    notebook_id: int,
+    artifact_id: int,
+    owner_user_id: int = 1,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    notebook = crud.get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+
+    artifact = crud.get_artifact(db=db, artifact_id=artifact_id)
+    if artifact is None or artifact.notebook_id != notebook_id:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    if artifact.status != "ready":
+        raise HTTPException(status_code=409, detail=f"Artifact not ready yet (status: {artifact.status}).")
+    if not artifact.file_path or not Path(artifact.file_path).exists():
+        raise HTTPException(status_code=404, detail="Artifact file not found on disk.")
+
+    file_path = Path(artifact.file_path)
+    media_type = "text/markdown" if file_path.suffix.lower() == ".md" else "application/octet-stream"
+    return FileResponse(path=str(file_path), media_type=media_type, filename=file_path.name)
 
 
 app.include_router(auth_router)

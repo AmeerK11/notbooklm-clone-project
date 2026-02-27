@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from src.ingestion.vectorstore import ChromaAdapter
+from utils.llm_client import generate_chat_completion
 
 load_dotenv()
 
@@ -23,13 +24,11 @@ class QuizGenerator:
         Initialize quiz generator.
 
         Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY from .env)
-            model: LLM model to use (defaults to LLM_MODEL from .env)
+            api_key: Unused legacy arg (kept for compatibility)
+            model: Display model name to record in metadata
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        _ = api_key
         self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
-        self.client = OpenAI(api_key=self.api_key)
-
         # Default settings from .env
         self.default_num_questions = int(os.getenv("DEFAULT_QUIZ_QUESTIONS", "5"))
         self.default_difficulty = os.getenv("DEFAULT_QUIZ_DIFFICULTY", "medium")
@@ -147,21 +146,14 @@ class QuizGenerator:
         prompt = self._build_quiz_prompt(context, num_questions, difficulty)
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert quiz generator. Create clear, educational, and well-structured quiz questions.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7,
-                response_format={"type": "json_object"},
+            raw_text = generate_chat_completion(
+                system_prompt=(
+                    "You are an expert quiz generator. "
+                    "Create clear, educational, and well-structured quiz questions."
+                ),
+                user_prompt=prompt,
             )
-
-            quiz_data = json.loads(response.choices[0].message.content)
-            return quiz_data
+            return self._parse_quiz_json(raw_text)
 
         except Exception as e:
             print(f"❌ Error generating quiz: {e}")
@@ -217,17 +209,79 @@ Requirements:
 - Ensure questions are based solely on the provided content
 """
 
-    def save_quiz(self, quiz_data: Dict[str, Any], user_id: str, notebook_id: str) -> str:
-        """Save generated quiz to file."""
+    def _parse_quiz_json(self, raw_text: str) -> Dict[str, Any]:
+        text = (raw_text or "").strip()
+        if not text:
+            return {"questions": []}
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: extract the largest JSON object from a markdown/codefence response.
+        candidates = re.findall(r"\{[\s\S]*\}", text)
+        for candidate in sorted(candidates, key=len, reverse=True):
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        return {"questions": []}
+
+    def to_markdown(self, quiz_data: Dict[str, Any], title: str | None = None) -> str:
+        title_text = title or "Quiz"
+        questions = quiz_data.get("questions", [])
+        metadata = quiz_data.get("metadata", {})
+        difficulty = metadata.get("difficulty", "unknown")
+        generated_at = metadata.get("generated_at", datetime.utcnow().isoformat())
+
+        lines: list[str] = [
+            f"# {title_text}",
+            "",
+            f"- Difficulty: {difficulty}",
+            f"- Generated at: {generated_at}",
+            "",
+            "## Questions",
+            "",
+        ]
+
+        for idx, q in enumerate(questions, start=1):
+            question_text = str(q.get("question", "")).strip() or f"Question {idx}"
+            lines.append(f"{idx}. {question_text}")
+            options = q.get("options", [])
+            if isinstance(options, list):
+                for option in options:
+                    lines.append(f"   - {str(option)}")
+            lines.append("")
+
+        lines.extend(["## Answer Key", ""])
+        for idx, q in enumerate(questions, start=1):
+            answer = str(q.get("correct_answer", "")).strip() or "N/A"
+            explanation = str(q.get("explanation", "")).strip()
+            lines.append(f"{idx}. **Answer:** {answer}")
+            if explanation:
+                lines.append(f"   - Explanation: {explanation}")
+            topic = str(q.get("topic", "")).strip()
+            if topic:
+                lines.append(f"   - Topic: {topic}")
+            lines.append("")
+
+        return "\n".join(lines).strip() + "\n"
+
+    def save_quiz(self, markdown: str, user_id: str, notebook_id: str) -> str:
+        """Save generated quiz markdown to file."""
         quiz_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/quizzes")
         quiz_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        filename = f"quiz_{timestamp}.json"
+        filename = f"quiz_{timestamp}.md"
         filepath = quiz_dir / filename
 
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(quiz_data, f, indent=2, ensure_ascii=False)
+            f.write(markdown)
 
         print(f"✓ Quiz saved to: {filepath}")
         return str(filepath)
@@ -263,4 +317,8 @@ if __name__ == "__main__":
         print(json.dumps(quiz, indent=2))
 
         if args.save:
-            generator.save_quiz(quiz, args.user, args.notebook)
+            generator.save_quiz(
+                generator.to_markdown(quiz, title=f"Quiz ({args.difficulty or 'mixed'})"),
+                args.user,
+                args.notebook,
+            )

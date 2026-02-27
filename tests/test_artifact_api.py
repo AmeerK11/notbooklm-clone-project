@@ -97,7 +97,8 @@ class TestQuizEndpoint:
         with patch("app.QuizGenerator") as MockGen:
             mock_gen = MagicMock()
             mock_gen.generate_quiz.return_value = mock_result
-            mock_gen.save_quiz.return_value = "/tmp/quiz.json"
+            mock_gen.to_markdown.return_value = "# Quiz\n\n## Questions\n\n1. What is ML?"
+            mock_gen.save_quiz.return_value = "/tmp/quiz.md"
             MockGen.return_value = mock_gen
 
             resp = client.post(
@@ -110,9 +111,8 @@ class TestQuizEndpoint:
         assert data["type"] == "quiz"
         assert data["status"] == "ready"
         assert data["content"] is not None
-        # Content should be valid JSON with the questions
-        content = json.loads(data["content"])
-        assert "questions" in content
+        assert data["content"].startswith("# Quiz")
+        assert data["file_path"] == "/tmp/quiz.md"
 
     def test_generate_quiz_no_content_fails(self, client, notebook):
         """POST quiz marks artifact as failed when generator reports no content."""
@@ -334,3 +334,129 @@ class TestPodcastAudio:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("audio/mpeg")
         assert resp.content == b"fake mp3 content"
+
+
+class TestPodcastTranscript:
+    def test_transcript_ready_from_content_returns_200(self, client, notebook, db_session):
+        """GET /transcript returns markdown content when transcript file path is absent."""
+        artifact = crud.create_artifact(
+            db=db_session,
+            notebook_id=notebook.id,
+            artifact_type="podcast",
+        )
+        crud.update_artifact(
+            db_session,
+            artifact.id,
+            status="ready",
+            content="# Podcast Transcript\n\nHello world",
+        )
+
+        resp = client.get(f"/notebooks/{notebook.id}/artifacts/{artifact.id}/transcript")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+        assert b"Podcast Transcript" in resp.content
+
+    def test_transcript_ready_from_file_returns_200(self, client, notebook, db_session, tmp_path):
+        """GET /transcript streams file when transcript_path exists in metadata."""
+        transcript_file = tmp_path / "transcript.md"
+        transcript_file.write_text("# Transcript\n\nBody", encoding="utf-8")
+
+        artifact = crud.create_artifact(
+            db=db_session,
+            notebook_id=notebook.id,
+            artifact_type="podcast",
+            metadata={"transcript_path": str(transcript_file)},
+        )
+        crud.update_artifact(
+            db_session,
+            artifact.id,
+            status="ready",
+            content="# fallback",
+        )
+
+        resp = client.get(f"/notebooks/{notebook.id}/artifacts/{artifact.id}/transcript")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+        assert resp.content == b"# Transcript\n\nBody"
+
+
+# ── Report endpoint tests ─────────────────────────────────────────────────────
+
+
+class TestReportEndpoint:
+    def test_generate_report_success(self, client, notebook):
+        """POST report returns 200 with status=ready and markdown content."""
+        with patch("app.ReportGenerator") as MockGen:
+            mock_gen = MagicMock()
+            mock_gen.generate_report.return_value = {
+                "markdown": "# Notebook Report\n\n## Executive Summary\nSummary text.",
+                "metadata": {"notebook_id": str(notebook.id)},
+            }
+            mock_gen.save_report.return_value = "/tmp/report.md"
+            MockGen.return_value = mock_gen
+
+            resp = client.post(
+                f"/notebooks/{notebook.id}/artifacts/report",
+                json={"title": "My Report", "topic_focus": "overview"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "report"
+        assert data["status"] == "ready"
+        assert data["content"].startswith("# Notebook Report")
+        assert data["file_path"] == "/tmp/report.md"
+
+    def test_generate_report_error_marks_failed(self, client, notebook):
+        """POST report marks artifact failed when generator returns error."""
+        with patch("app.ReportGenerator") as MockGen:
+            mock_gen = MagicMock()
+            mock_gen.generate_report.return_value = {
+                "error": "No content found in notebook.",
+                "markdown": "",
+                "metadata": {},
+            }
+            MockGen.return_value = mock_gen
+
+            resp = client.post(f"/notebooks/{notebook.id}/artifacts/report", json={})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "report"
+        assert data["status"] == "failed"
+        assert data["error_message"] is not None
+
+
+# ── Generic download tests ────────────────────────────────────────────────────
+
+
+class TestArtifactDownload:
+    def test_download_pending_returns_409(self, client, notebook, db_session):
+        artifact = crud.create_artifact(
+            db=db_session,
+            notebook_id=notebook.id,
+            artifact_type="report",
+        )
+        resp = client.get(f"/notebooks/{notebook.id}/artifacts/{artifact.id}/download")
+        assert resp.status_code == 409
+
+    def test_download_ready_markdown_returns_200(self, client, notebook, db_session, tmp_path):
+        report_file = tmp_path / "report.md"
+        report_file.write_text("# Report\n\nBody", encoding="utf-8")
+
+        artifact = crud.create_artifact(
+            db=db_session,
+            notebook_id=notebook.id,
+            artifact_type="report",
+        )
+        crud.update_artifact(
+            db_session,
+            artifact.id,
+            status="ready",
+            file_path=str(report_file),
+        )
+
+        resp = client.get(f"/notebooks/{notebook.id}/artifacts/{artifact.id}/download")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+        assert resp.content == b"# Report\n\nBody"

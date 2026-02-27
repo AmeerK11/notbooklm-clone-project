@@ -202,6 +202,7 @@ def update_artifact(
     content: str | None = None,
     file_path: str | None = None,
     error_message: str | None = None,
+    metadata: dict | None = None,
 ) -> Artifact | None:
     artifact = db.get(Artifact, artifact_id)
     if not artifact:
@@ -214,6 +215,12 @@ def update_artifact(
         artifact.file_path = file_path
     if error_message:
         artifact.error_message = error_message
+    if metadata is not None:
+        existing = artifact.artifact_metadata or {}
+        if isinstance(existing, dict):
+            artifact.artifact_metadata = {**existing, **metadata}
+        else:
+            artifact.artifact_metadata = metadata
     if status == "ready":
         artifact.generated_at = datetime.utcnow()
     

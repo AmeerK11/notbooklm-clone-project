@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from src.ingestion.vectorstore import ChromaAdapter
+from utils.llm_client import generate_chat_completion
 from .tts_adapter import get_tts_adapter, TTSProvider
 
 load_dotenv()
@@ -29,13 +30,12 @@ class PodcastGenerator:
         Initialize podcast generator.
 
         Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY from .env)
-            model: LLM model to use (defaults to LLM_MODEL from .env)
+            api_key: Unused legacy arg (kept for compatibility)
+            model: Display model name to record in metadata
             tts_provider: TTS provider (defaults to TTS_PROVIDER from .env)
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        _ = api_key
         self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
-        self.client = OpenAI(api_key=self.api_key)
 
         # TTS configuration
         tts_provider = tts_provider or os.getenv("TTS_PROVIDER", "edge")
@@ -187,20 +187,14 @@ class PodcastGenerator:
         prompt = self._build_podcast_prompt(context, target_words, hosts)
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert podcast script writer. Create engaging, natural, educational conversations.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.8,
-                response_format={"type": "json_object"},
+            raw_text = generate_chat_completion(
+                system_prompt=(
+                    "You are an expert podcast script writer. "
+                    "Create engaging, natural, educational conversations."
+                ),
+                user_prompt=prompt,
             )
-
-            script_data = json.loads(response.choices[0].message.content)
+            script_data = self._parse_script_json(raw_text)
             segments = script_data.get("segments", [])
 
             print(f"✓ Generated script with {len(segments)} segments")
@@ -261,6 +255,27 @@ IMPORTANT:
 - Include pauses and transitions like "That's interesting..." or "Let me explain..."
 - Make it sound like a real conversation, not a lecture
 """
+
+    def _parse_script_json(self, raw_text: str) -> Dict[str, Any]:
+        text = (raw_text or "").strip()
+        if not text:
+            return {"segments": []}
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        candidates = re.findall(r"\{[\s\S]*\}", text)
+        for candidate in sorted(candidates, key=len, reverse=True):
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        return {"segments": []}
 
     def _synthesize_segments(
         self,
@@ -328,6 +343,10 @@ IMPORTANT:
         if not audio_segments:
             return ""
 
+        # pydub needs ffmpeg/ffprobe on PATH. If unavailable, return first segment.
+        if not Path(audio_segments[0]).exists():
+            return ""
+
         combined = AudioSegment.empty()
 
         for i, segment_path in enumerate(audio_segments, 1):
@@ -335,6 +354,9 @@ IMPORTANT:
                 audio = AudioSegment.from_file(segment_path)
                 combined += audio
                 combined += AudioSegment.silent(duration=500)  # 0.5s pause
+            except FileNotFoundError:
+                print("⚠️  ffmpeg not found. Using first synthesized segment as final audio.")
+                return audio_segments[0]
             except Exception as e:
                 print(f"  ⚠️  Error processing segment {i}: {e}")
                 continue
@@ -343,16 +365,46 @@ IMPORTANT:
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         final_path = str(output_dir / f"podcast_{timestamp}.mp3")
 
-        combined.export(final_path, format="mp3")
+        try:
+            combined.export(final_path, format="mp3")
+        except FileNotFoundError:
+            print("⚠️  ffmpeg not found during export. Using first synthesized segment as final audio.")
+            return audio_segments[0]
 
         print(f"✓ Final podcast: {final_path}")
         print(f"  Duration: {len(combined) / 1000:.1f} seconds")
 
         return final_path
 
+    def to_markdown(self, podcast_data: Dict[str, Any], title: str | None = None) -> str:
+        title_text = title or "Podcast Transcript"
+        metadata = podcast_data.get("metadata", {})
+        transcript = podcast_data.get("transcript", [])
+
+        lines: list[str] = [
+            f"# {title_text}",
+            "",
+            f"- Duration target: {metadata.get('duration_target', 'unknown')}",
+            f"- TTS provider: {metadata.get('tts_provider', 'unknown')}",
+            f"- Generated at: {metadata.get('generated_at', datetime.utcnow().isoformat())}",
+            "",
+            "## Transcript",
+            "",
+        ]
+
+        for segment in transcript:
+            speaker = str(segment.get("speaker", "Speaker")).strip()
+            text = str(segment.get("text", "")).strip()
+            if not text:
+                continue
+            lines.append(f"**{speaker}:** {text}")
+            lines.append("")
+
+        return "\n".join(lines).strip() + "\n"
+
     def save_transcript(
         self,
-        podcast_data: Dict[str, Any],
+        markdown: str,
         user_id: str,
         notebook_id: str,
     ) -> str:
@@ -363,11 +415,11 @@ IMPORTANT:
         transcript_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        filename = f"transcript_{timestamp}.json"
+        filename = f"transcript_{timestamp}.md"
         filepath = transcript_dir / filename
 
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(podcast_data, f, indent=2, ensure_ascii=False)
+            f.write(markdown)
 
         print(f"✓ Transcript saved to: {filepath}")
         return str(filepath)
@@ -412,4 +464,8 @@ if __name__ == "__main__":
         print(f"  Provider: {result['metadata']['tts_provider']}")
 
         if args.save_transcript:
-            generator.save_transcript(result, args.user, args.notebook)
+            generator.save_transcript(
+                generator.to_markdown(result, title=f"Podcast – {args.duration or 'default'}"),
+                args.user,
+                args.notebook,
+            )
