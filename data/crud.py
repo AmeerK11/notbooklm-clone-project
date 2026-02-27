@@ -49,6 +49,32 @@ def get_notebook_for_user(db: Session, notebook_id: int, owner_user_id: int) -> 
     )
 
 
+def update_notebook_title(
+    db: Session,
+    notebook_id: int,
+    owner_user_id: int,
+    title: str,
+) -> Notebook | None:
+    notebook = get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        return None
+
+    notebook.title = title
+    db.commit()
+    db.refresh(notebook)
+    return notebook
+
+
+def delete_notebook(db: Session, notebook_id: int, owner_user_id: int) -> bool:
+    notebook = get_notebook_for_user(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if notebook is None:
+        return False
+
+    db.delete(notebook)
+    db.commit()
+    return True
+
+
 def create_source(
     db: Session,
     notebook_id: int,

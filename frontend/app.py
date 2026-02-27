@@ -35,6 +35,30 @@ def api_post(path: str, payload: dict) -> tuple[bool, dict | list | str]:
         return False, str(exc)
 
 
+def api_patch(path: str, payload: dict) -> tuple[bool, dict | list | str]:
+    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+    try:
+        response = requests.patch(
+            f"{base_url}{path}", json=payload, timeout=REQUEST_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as exc:
+        return False, str(exc)
+
+
+def api_delete(path: str, params: dict | None = None) -> tuple[bool, dict | list | str]:
+    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+    try:
+        response = requests.delete(
+            f"{base_url}{path}", params=params, timeout=REQUEST_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        return True, response.json()
+    except requests.RequestException as exc:
+        return False, str(exc)
+
+
 def api_post_multipart(
     path: str, data: dict[str, str | int], files: dict[str, tuple[str, bytes, str]]
 ) -> tuple[bool, dict | list | str]:
@@ -145,6 +169,54 @@ elif page == "Notebooks":
                 st.session_state["selected_notebook_title"] = selected["title"]
                 st.session_state["page"] = "Notebooks"
                 st.rerun()
+
+            with st.expander("Manage selected notebook"):
+                with st.form("rename_notebook_form"):
+                    renamed_title = st.text_input(
+                        "New notebook title",
+                        value=selected.get("title", ""),
+                    )
+                    rename_submitted = st.form_submit_button("Rename notebook")
+
+                if rename_submitted:
+                    if not renamed_title.strip():
+                        st.error("Notebook title is required.")
+                    else:
+                        payload = {
+                            "owner_user_id": owner_user_id,
+                            "title": renamed_title.strip(),
+                        }
+                        ok, rename_result = api_patch(f"/notebooks/{selected['id']}", payload)
+                        if ok:
+                            st.success("Notebook renamed.")
+                            if st.session_state.get("selected_notebook_id") == selected["id"]:
+                                st.session_state["selected_notebook_title"] = renamed_title.strip()
+                            st.rerun()
+                        else:
+                            st.error("Failed to rename notebook.")
+                            st.code(str(rename_result))
+
+                delete_confirm = st.checkbox(
+                    "Confirm delete selected notebook",
+                    key=f"delete_confirm_{selected['id']}",
+                )
+                if st.button("Delete notebook", key=f"delete_notebook_{selected['id']}"):
+                    if not delete_confirm:
+                        st.error("Please confirm deletion first.")
+                    else:
+                        ok, delete_result = api_delete(
+                            f"/notebooks/{selected['id']}",
+                            params={"owner_user_id": owner_user_id},
+                        )
+                        if ok:
+                            st.success("Notebook deleted.")
+                            if st.session_state.get("selected_notebook_id") == selected["id"]:
+                                st.session_state.pop("selected_notebook_id", None)
+                                st.session_state.pop("selected_notebook_title", None)
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete notebook.")
+                            st.code(str(delete_result))
 
             selected_notebook_id = st.session_state.get("selected_notebook_id")
             selected_notebook_title = st.session_state.get("selected_notebook_title")

@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 import json
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +41,11 @@ threads_router = APIRouter(prefix="/threads", tags=["threads"])
 
 
 class NotebookCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    owner_user_id: int | None = None
+
+
+class NotebookUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     owner_user_id: int | None = None
 
@@ -166,6 +173,17 @@ def _build_conversation_history(
     return rows
 
 
+def _cleanup_notebook_files(owner_user_id: int, notebook_id: int) -> None:
+    upload_dir = Path("uploads") / f"notebook_{notebook_id}"
+    if upload_dir.exists() and upload_dir.is_dir():
+        shutil.rmtree(upload_dir, ignore_errors=True)
+
+    storage_base_dir = Path(os.getenv("STORAGE_BASE_DIR", "data"))
+    notebook_storage_dir = storage_base_dir / "users" / str(owner_user_id) / "notebooks" / str(notebook_id)
+    if notebook_storage_dir.exists() and notebook_storage_dir.is_dir():
+        shutil.rmtree(notebook_storage_dir, ignore_errors=True)
+
+
 @app.get("/health", tags=["system"])
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -197,6 +215,37 @@ def get_notebooks(owner_user_id: int = 1, db: Session = Depends(get_db)) -> list
     return [
         NotebookResponse(id=n.id, owner_user_id=n.owner_user_id, title=n.title) for n in notebooks
     ]
+
+
+@notebooks_router.patch("/{notebook_id}", response_model=NotebookResponse)
+def rename_notebook(
+    notebook_id: int,
+    payload: NotebookUpdateRequest,
+    db: Session = Depends(get_db),
+) -> NotebookResponse:
+    owner_user_id = payload.owner_user_id or 1
+    notebook = crud.update_notebook_title(
+        db=db,
+        notebook_id=notebook_id,
+        owner_user_id=owner_user_id,
+        title=payload.title,
+    )
+    if notebook is None:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+    return NotebookResponse(id=notebook.id, owner_user_id=notebook.owner_user_id, title=notebook.title)
+
+
+@notebooks_router.delete("/{notebook_id}")
+def delete_notebook(
+    notebook_id: int,
+    owner_user_id: int = 1,
+    db: Session = Depends(get_db),
+) -> dict[str, int | str | bool]:
+    deleted = crud.delete_notebook(db=db, notebook_id=notebook_id, owner_user_id=owner_user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Notebook not found for this user.")
+    _cleanup_notebook_files(owner_user_id=owner_user_id, notebook_id=notebook_id)
+    return {"deleted": True, "notebook_id": notebook_id, "owner_user_id": owner_user_id}
 
 
 @notebooks_router.post("/{notebook_id}/sources", response_model=SourceResponse)
