@@ -450,6 +450,37 @@ def choose_workspace_section(notebook_id: int) -> str:
     return str(selected)
 
 
+def choose_artifact_for_notebook(notebook_id: int, artifacts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    valid_artifacts = [
+        artifact for artifact in artifacts if isinstance(artifact, dict) and "id" in artifact
+    ]
+    if not valid_artifacts:
+        return None
+
+    # Latest first for easier access to recently generated items.
+    valid_artifacts.sort(key=lambda a: int(a.get("id", 0)), reverse=True)
+    artifact_map = {int(a["id"]): a for a in valid_artifacts}
+    artifact_ids = list(artifact_map.keys())
+
+    state_key = f"selected_artifact_id_{notebook_id}"
+    previous_id = st.session_state.get(state_key)
+    if not isinstance(previous_id, int) or previous_id not in artifact_map:
+        previous_id = artifact_ids[0]
+
+    selected_id = st.selectbox(
+        "Select artifact",
+        options=artifact_ids,
+        index=artifact_ids.index(previous_id),
+        key=f"artifact_selector_{notebook_id}",
+        format_func=lambda aid: build_artifact_option_label(artifact_map[int(aid)]),
+    )
+    if not isinstance(selected_id, int):
+        return artifact_map[previous_id]
+
+    st.session_state[state_key] = selected_id
+    return artifact_map[selected_id]
+
+
 inject_theme()
 
 if "page" not in st.session_state:
@@ -1113,78 +1144,74 @@ elif page == "Notebooks":
                                 render_metric_card("Failed", failed_count)
 
                             st.dataframe(artifacts, use_container_width=True, hide_index=True)
-                            artifact_options = {
-                                build_artifact_option_label(a): a
-                                for a in artifacts
-                                if isinstance(a, dict) and "id" in a
-                            }
-                            selected_artifact_label = st.selectbox(
-                                "Select artifact",
-                                options=list(artifact_options.keys()),
-                                key="selected_artifact_label",
+                            selected_artifact = choose_artifact_for_notebook(
+                                int(selected_notebook_id),
+                                artifacts,
                             )
-                            selected_artifact = artifact_options[selected_artifact_label]
-                            artifact_id = int(selected_artifact["id"])
-                            artifact_type = str(selected_artifact.get("type", ""))
-                            artifact_status = str(selected_artifact.get("status", ""))
-                            artifact_content = selected_artifact.get("content")
-                            artifact_error = selected_artifact.get("error_message")
+                            if selected_artifact is None:
+                                st.info("Select an artifact to preview.")
+                            else:
+                                artifact_id = int(selected_artifact["id"])
+                                artifact_type = str(selected_artifact.get("type", ""))
+                                artifact_status = str(selected_artifact.get("status", ""))
+                                artifact_content = selected_artifact.get("content")
+                                artifact_error = selected_artifact.get("error_message")
 
-                            status_col, type_col = st.columns([1, 4])
-                            with status_col:
-                                render_status_pill(artifact_status)
-                            with type_col:
-                                st.caption(f"Artifact type: {artifact_type}")
+                                status_col, type_col = st.columns([1, 4])
+                                with status_col:
+                                    render_status_pill(artifact_status)
+                                with type_col:
+                                    st.caption(f"Artifact type: {artifact_type}")
 
-                            if artifact_error:
-                                st.error(str(artifact_error))
+                                if artifact_error:
+                                    st.error(str(artifact_error))
 
-                            if artifact_type == "report" and artifact_content:
-                                st.markdown("### Report Preview")
-                                st.markdown(str(artifact_content))
-                                st.download_button(
-                                    "Download report (.md)",
-                                    data=str(artifact_content).encode("utf-8"),
-                                    file_name=f"report_{artifact_id}.md",
-                                    mime="text/markdown",
-                                )
-                            elif artifact_type == "quiz" and artifact_content:
-                                st.markdown("### Quiz Preview")
-                                st.markdown(str(artifact_content))
-                                st.download_button(
-                                    "Download quiz (.md)",
-                                    data=str(artifact_content).encode("utf-8"),
-                                    file_name=f"quiz_{artifact_id}.md",
-                                    mime="text/markdown",
-                                )
-                            elif artifact_type == "podcast":
-                                if artifact_content:
-                                    st.markdown("### Transcript")
+                                if artifact_type == "report" and artifact_content:
+                                    st.markdown("### Report Preview")
                                     st.markdown(str(artifact_content))
                                     st.download_button(
-                                        "Download transcript (.md)",
+                                        "Download report (.md)",
                                         data=str(artifact_content).encode("utf-8"),
-                                        file_name=f"podcast_transcript_{artifact_id}.md",
+                                        file_name=f"report_{artifact_id}.md",
                                         mime="text/markdown",
                                     )
-                                if artifact_status == "ready":
-                                    ok_audio, audio_result, _ = api_get_bytes(
-                                        f"/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/audio"
+                                elif artifact_type == "quiz" and artifact_content:
+                                    st.markdown("### Quiz Preview")
+                                    st.markdown(str(artifact_content))
+                                    st.download_button(
+                                        "Download quiz (.md)",
+                                        data=str(artifact_content).encode("utf-8"),
+                                        file_name=f"quiz_{artifact_id}.md",
+                                        mime="text/markdown",
                                     )
-                                    if ok_audio and isinstance(audio_result, bytes):
-                                        st.audio(audio_result, format="audio/mp3")
+                                elif artifact_type == "podcast":
+                                    if artifact_content:
+                                        st.markdown("### Transcript")
+                                        st.markdown(str(artifact_content))
                                         st.download_button(
-                                            "Download podcast (.mp3)",
-                                            data=audio_result,
-                                            file_name=f"podcast_{artifact_id}.mp3",
-                                            mime="audio/mpeg",
+                                            "Download transcript (.md)",
+                                            data=str(artifact_content).encode("utf-8"),
+                                            file_name=f"podcast_transcript_{artifact_id}.md",
+                                            mime="text/markdown",
                                         )
+                                    if artifact_status == "ready":
+                                        ok_audio, audio_result, _ = api_get_bytes(
+                                            f"/notebooks/{selected_notebook_id}/artifacts/{artifact_id}/audio"
+                                        )
+                                        if ok_audio and isinstance(audio_result, bytes):
+                                            st.audio(audio_result, format="audio/mp3")
+                                            st.download_button(
+                                                "Download podcast (.mp3)",
+                                                data=audio_result,
+                                                file_name=f"podcast_{artifact_id}.mp3",
+                                                mime="audio/mpeg",
+                                            )
+                                        else:
+                                            st.error(f"Unable to load audio: {audio_result}")
                                     else:
-                                        st.error(f"Unable to load audio: {audio_result}")
+                                        st.info(f"Podcast status: {artifact_status}")
                                 else:
-                                    st.info(f"Podcast status: {artifact_status}")
-                            else:
-                                st.info("Select an artifact to preview.")
+                                    st.info("Select an artifact to preview.")
 
                             if auto_refresh and in_flight > 0:
                                 st.caption(

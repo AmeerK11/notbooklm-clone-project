@@ -208,6 +208,20 @@ class TestReportEndpoint:
         )
         assert resp.status_code == 400
 
+    def test_generate_report_provider_config_error_returns_failed_artifact(self, client, notebook):
+        """Provider init/runtime errors should not bubble as HTTP 500."""
+        with patch("app.ReportGenerator", side_effect=ValueError("missing provider credentials")):
+            resp = client.post(
+                f"/notebooks/{notebook.id}/artifacts/report",
+                json={"detail_level": "medium"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "report"
+        assert data["status"] == "failed"
+        assert "missing provider credentials" in str(data.get("error_message"))
+
     def test_generate_report_unknown_notebook_404(self, client):
         resp = client.post("/notebooks/9999/artifacts/report", json={"detail_level": "medium"})
         assert resp.status_code == 404

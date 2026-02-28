@@ -312,13 +312,9 @@ class QuizGenerator:
             if not prompt:
                 continue
 
-            options_raw = item.get("options")
-            options: List[str] = []
-            if isinstance(options_raw, list):
-                for opt in options_raw:
-                    text = str(opt).strip()
-                    if text:
-                        options.append(text)
+            options = self._normalize_options(item.get("options"))
+            if not options:
+                continue
 
             answer = self._normalize_answer_letter(str(item.get("correct_answer", "")).strip())
             explanation = str(item.get("explanation", "")).strip()
@@ -339,8 +335,48 @@ class QuizGenerator:
                 break
         return normalized
 
+    def _normalize_options(self, options_raw: Any) -> List[str]:
+        """
+        Normalize options into 2-6 labeled choices: A) ... B) ... etc.
+        Accepts list, dict, or multiline string.
+        """
+        parsed: List[str] = []
+
+        if isinstance(options_raw, list):
+            parsed = [str(opt).strip() for opt in options_raw if str(opt).strip()]
+        elif isinstance(options_raw, dict):
+            for key in sorted(options_raw.keys()):
+                value = str(options_raw.get(key, "")).strip()
+                if not value:
+                    continue
+                parsed.append(f"{str(key).strip().upper()}) {value}")
+        elif isinstance(options_raw, str):
+            lines = [line.strip() for line in options_raw.replace("\r", "\n").split("\n")]
+            parsed = [line for line in lines if line]
+
+        if not parsed:
+            return []
+
+        cleaned: List[str] = []
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for idx, text in enumerate(parsed):
+            body = self._option_text_only(text)
+            if not body:
+                continue
+            label = letters[idx] if idx < len(letters) else str(idx + 1)
+            cleaned.append(f"{label}) {body}")
+
+        # Keep a reasonable range and ensure common quiz shape is preserved.
+        return cleaned[:6]
+
+    def _option_text_only(self, value: str) -> str:
+        text = str(value or "").strip()
+        # Strip prefixes like "A)", "A.", "(A)", "1)", "1."
+        text = re.sub(r"^\(?[A-Z0-9]\)?[\.\):\-]\s*", "", text, flags=re.IGNORECASE)
+        return text.strip()
+
     def _normalize_answer_letter(self, value: str) -> str:
-        match = re.search(r"[A-D]", value.upper())
+        match = re.search(r"[A-Z]", value.upper())
         return match.group(0) if match else ""
 
     def _build_quiz_prompt(self, context: str, num_questions: int, difficulty: str) -> str:
@@ -412,7 +448,9 @@ Requirements:
             lines.append(f"### {idx}. {prompt or 'Question'}")
             options = question.get("options", [])
             for option in options if isinstance(options, list) else []:
-                lines.append(f"- {str(option)}")
+                option_text = str(option).strip()
+                if option_text:
+                    lines.append(f"- {option_text}")
             lines.append("")
 
         lines.append("## Answer Key")

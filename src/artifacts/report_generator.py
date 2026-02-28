@@ -10,17 +10,73 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import requests
 
 from src.ingestion.vectorstore import ChromaAdapter
 
 load_dotenv()
 
+SUPPORTED_REPORT_LLM_PROVIDERS = {"openai", "groq", "ollama"}
+DEFAULT_REPORT_MODELS = {
+    "openai": "gpt-4o-mini",
+    "groq": "llama-3.1-8b-instant",
+    "ollama": "qwen2.5:3b",
+}
+REPORT_SYSTEM_PROMPT = (
+    "You write high quality reports grounded only in provided source context. "
+    "Do not invent facts."
+)
+
 
 class ReportGenerator:
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
-        self.client = OpenAI(api_key=self.api_key)
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        llm_provider: Optional[str] = None,
+    ):
+        provider_default = (
+            llm_provider
+            or os.getenv("REPORT_LLM_PROVIDER", "").strip()
+            or os.getenv("QUIZ_LLM_PROVIDER", "").strip()
+            or os.getenv("TRANSCRIPT_LLM_PROVIDER", "").strip()
+            or "openai"
+        )
+        self.llm_provider = provider_default.strip().lower()
+        if self.llm_provider not in SUPPORTED_REPORT_LLM_PROVIDERS:
+            raise ValueError(
+                f"Unsupported REPORT_LLM_PROVIDER='{self.llm_provider}'. "
+                f"Choose from: {sorted(SUPPORTED_REPORT_LLM_PROVIDERS)}"
+            )
+
+        self.model = self._resolve_model_name(model)
+        self._openai_client: OpenAI | None = None
+        self._groq_client = None
+        self._ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+        if self.llm_provider == "openai":
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+            self._openai_client = OpenAI(api_key=self.api_key)
+        elif self.llm_provider == "groq":
+            from groq import Groq
+
+            groq_api_key = os.getenv("GROQ_API_KEY")
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY is required when REPORT_LLM_PROVIDER=groq")
+            self._groq_client = Groq(api_key=groq_api_key)
+        else:
+            self.api_key = None
+
+    def _resolve_model_name(self, explicit_model: Optional[str]) -> str:
+        if explicit_model and explicit_model.strip():
+            return explicit_model.strip()
+        configured = os.getenv("REPORT_LLM_MODEL", "").strip()
+        if configured:
+            return configured
+        legacy = os.getenv("LLM_MODEL", "").strip()
+        if legacy:
+            return legacy
+        return DEFAULT_REPORT_MODELS.get(self.llm_provider, "gpt-4o-mini")
 
     def generate_report(
         self,
@@ -40,6 +96,8 @@ class ReportGenerator:
         return {
             "content": report_markdown,
             "detail_level": detail_level,
+            "llm_provider": self.llm_provider,
+            "llm_model": self.model,
         }
 
     def _get_report_context(self, user_id: str, notebook_id: str, topic_focus: str | None) -> str:
@@ -101,24 +159,50 @@ Requirements:
 """
 
         try:
-            response = self.client.chat.completions.create(
+            return self._generate_report_content(prompt)
+        except Exception:
+            return ""
+
+    def _generate_report_content(self, prompt: str) -> str:
+        if self.llm_provider == "openai":
+            assert self._openai_client is not None
+            response = self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You write high quality reports grounded only in provided source context. "
-                            "Do not invent facts."
-                        ),
-                    },
+                    {"role": "system", "content": REPORT_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.4,
             )
-            content = response.choices[0].message.content or ""
-            return str(content).strip()
-        except Exception:
-            return ""
+            return str(response.choices[0].message.content or "").strip()
+
+        if self.llm_provider == "groq":
+            assert self._groq_client is not None
+            response = self._groq_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": REPORT_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.4,
+            )
+            return str(response.choices[0].message.content or "").strip()
+
+        payload = {
+            "model": self.model,
+            "system": REPORT_SYSTEM_PROMPT,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.4},
+        }
+        response = requests.post(
+            f"{self._ollama_base_url}/api/generate",
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        body = response.json()
+        return str(body.get("response", "")).strip()
 
     def save_report(self, markdown_text: str, user_id: str, notebook_id: str) -> str:
         report_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/reports")

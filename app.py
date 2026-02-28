@@ -1005,8 +1005,8 @@ async def generate_report_for_notebook(
             topic_focus=payload.topic_focus,
         )
     except Exception as exc:
-        crud.update_artifact(db, artifact.id, status="failed", error_message=str(exc))
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}") from exc
+        artifact = crud.update_artifact(db, artifact.id, status="failed", error_message=str(exc))
+        return _artifact_response(artifact)
 
     if "error" in result:
         artifact = crud.update_artifact(db, artifact.id, status="failed", error_message=result["error"])

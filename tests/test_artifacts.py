@@ -182,6 +182,43 @@ class TestQuizGenerator:
         assert "## Answer Key" in saved
         assert "1. **B**" in saved
 
+    def test_generate_quiz_normalizes_multiline_options(self, tmp_path):
+        """Multiline option strings are normalized into labeled bullet options."""
+        _chroma_dir(tmp_path)
+
+        mock_store = MagicMock()
+        mock_store.query.return_value = MOCK_CHROMA_RESULTS
+        raw_payload = {
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "What is the goal?",
+                    "options": "A) One\nB) Two\nC) Three\nD) Four",
+                    "correct_answer": "B) Two",
+                    "explanation": "Two is correct.",
+                    "topic": "Goals",
+                }
+            ]
+        }
+        mock_llm_resp = _make_openai_chat_response(raw_payload)
+
+        env = {"STORAGE_BASE_DIR": str(tmp_path / "data"), "OPENAI_API_KEY": "test-key"}
+        with patch.dict(os.environ, env):
+            with patch("src.artifacts.quiz_generator.ChromaAdapter", return_value=mock_store):
+                with patch("src.artifacts.quiz_generator.OpenAI") as mock_openai_cls:
+                    mock_client = MagicMock()
+                    mock_client.chat.completions.create.return_value = mock_llm_resp
+                    mock_openai_cls.return_value = mock_client
+
+                    gen = QuizGenerator()
+                    result = gen.generate_quiz(user_id="1", notebook_id="1", num_questions=1)
+                    markdown = gen.format_quiz_markdown(result, title="Quiz")
+
+        assert "error" not in result
+        assert result["questions"][0]["options"] == ["A) One", "B) Two", "C) Three", "D) Four"]
+        assert "- A) One" in markdown
+        assert "- D) Four" in markdown
+
 
 # ── PodcastGenerator tests ────────────────────────────────────────────────────
 
