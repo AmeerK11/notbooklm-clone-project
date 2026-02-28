@@ -5,17 +5,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import requests
 
 from src.ingestion.vectorstore import ChromaAdapter
 from .tts_adapter import get_tts_adapter, TTSProvider
 
 load_dotenv()
+
+SUPPORTED_TRANSCRIPT_LLM_PROVIDERS = {"openai", "groq", "ollama"}
+DEFAULT_TRANSCRIPT_MODELS = {
+    "openai": "gpt-4o-mini",
+    "groq": "llama-3.1-8b-instant",
+    "ollama": "qwen2.5:3b",
+}
+TRANSCRIPT_SYSTEM_PROMPT = (
+    "You are an expert podcast script writer. Create engaging, natural, educational conversations. "
+    "Return valid JSON only with a top-level 'segments' array."
+)
 
 
 class PodcastGenerator:
@@ -24,6 +37,7 @@ class PodcastGenerator:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         tts_provider: Optional[TTSProvider] = None,
+        llm_provider: Optional[str] = None,
     ):
         """
         Initialize podcast generator.
@@ -32,10 +46,31 @@ class PodcastGenerator:
             api_key: OpenAI API key (defaults to OPENAI_API_KEY from .env)
             model: LLM model to use (defaults to LLM_MODEL from .env)
             tts_provider: TTS provider (defaults to TTS_PROVIDER from .env)
+            llm_provider: Transcript LLM provider (openai, groq, ollama)
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
-        self.client = OpenAI(api_key=self.api_key)
+        self.llm_provider = (llm_provider or os.getenv("TRANSCRIPT_LLM_PROVIDER", "openai")).strip().lower()
+        if self.llm_provider not in SUPPORTED_TRANSCRIPT_LLM_PROVIDERS:
+            raise ValueError(
+                f"Unsupported TRANSCRIPT_LLM_PROVIDER='{self.llm_provider}'. "
+                f"Choose from: {sorted(SUPPORTED_TRANSCRIPT_LLM_PROVIDERS)}"
+            )
+        self.model = self._resolve_model_name(model)
+        self._openai_client: OpenAI | None = None
+        self._groq_client = None
+        self._ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+        if self.llm_provider == "openai":
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+            self._openai_client = OpenAI(api_key=self.api_key)
+        elif self.llm_provider == "groq":
+            from groq import Groq
+
+            groq_api_key = os.getenv("GROQ_API_KEY")
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY is required when TRANSCRIPT_LLM_PROVIDER=groq")
+            self._groq_client = Groq(api_key=groq_api_key)
+        else:
+            self.api_key = None
 
         # TTS configuration
         tts_provider = tts_provider or os.getenv("TTS_PROVIDER", "edge")
@@ -46,6 +81,14 @@ class PodcastGenerator:
         self.default_duration = os.getenv("DEFAULT_PODCAST_DURATION", "5min")
         self.host_1 = os.getenv("PODCAST_HOST_1", "Alex")
         self.host_2 = os.getenv("PODCAST_HOST_2", "Jordan")
+
+    def _resolve_model_name(self, explicit_model: Optional[str]) -> str:
+        if explicit_model and explicit_model.strip():
+            return explicit_model.strip()
+        configured = os.getenv("TRANSCRIPT_LLM_MODEL", "").strip()
+        if configured:
+            return configured
+        return DEFAULT_TRANSCRIPT_MODELS.get(self.llm_provider, "gpt-4o-mini")
 
     def generate_podcast(
         self,
@@ -112,6 +155,8 @@ class PodcastGenerator:
                 "duration_target": duration_target,
                 "hosts": hosts,
                 "tts_provider": self.tts_provider,
+                "llm_provider": self.llm_provider,
+                "llm_model": self.model,
                 "num_segments": len(script),
                 "topic_focus": topic_focus,
                 "generated_at": datetime.utcnow().isoformat(),
@@ -187,21 +232,8 @@ class PodcastGenerator:
         prompt = self._build_podcast_prompt(context, target_words, hosts)
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert podcast script writer. Create engaging, natural, educational conversations.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.8,
-                response_format={"type": "json_object"},
-            )
-
-            script_data = json.loads(response.choices[0].message.content)
-            segments = script_data.get("segments", [])
+            raw_response = self._generate_transcript_json(prompt)
+            segments = self._extract_segments(raw_response)
 
             print(f"✓ Generated script with {len(segments)} segments")
             return segments
@@ -209,6 +241,91 @@ class PodcastGenerator:
         except Exception as e:
             print(f"❌ Error generating script: {e}")
             return []
+
+    def _generate_transcript_json(self, prompt: str) -> str:
+        if self.llm_provider == "openai":
+            assert self._openai_client is not None
+            response = self._openai_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": TRANSCRIPT_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.8,
+                response_format={"type": "json_object"},
+            )
+            return str(response.choices[0].message.content or "")
+
+        if self.llm_provider == "groq":
+            assert self._groq_client is not None
+            response = self._groq_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": TRANSCRIPT_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.8,
+            )
+            return str(response.choices[0].message.content or "")
+
+        payload = {
+            "model": self.model,
+            "system": TRANSCRIPT_SYSTEM_PROMPT,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.8},
+        }
+        response = requests.post(
+            f"{self._ollama_base_url}/api/generate",
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        body = response.json()
+        return str(body.get("response", ""))
+
+    def _extract_segments(self, raw_response: str) -> List[Dict[str, str]]:
+        payload = self._extract_json_object(raw_response)
+        segments = payload.get("segments") if isinstance(payload, dict) else None
+        if not isinstance(segments, list):
+            return []
+
+        cleaned: List[Dict[str, str]] = []
+        for item in segments:
+            if not isinstance(item, dict):
+                continue
+            speaker = str(item.get("speaker", "")).strip()
+            text = str(item.get("text", "")).strip()
+            if not speaker or not text:
+                continue
+            cleaned.append({"speaker": speaker, "text": text})
+        return cleaned
+
+    def _extract_json_object(self, raw_response: str) -> Dict[str, Any]:
+        content = str(raw_response or "").strip()
+        if not content:
+            return {}
+
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     def _build_podcast_prompt(
         self,
@@ -420,11 +537,21 @@ if __name__ == "__main__":
         choices=["openai", "edge", "elevenlabs"],
         help="TTS provider (defaults to TTS_PROVIDER in .env)",
     )
+    parser.add_argument(
+        "--llm-provider",
+        choices=["openai", "groq", "ollama"],
+        help="Transcript LLM provider (defaults to TRANSCRIPT_LLM_PROVIDER in .env)",
+    )
+    parser.add_argument("--model", help="Override transcript LLM model")
     parser.add_argument("--save-transcript", action="store_true", help="Save transcript to file")
 
     args = parser.parse_args()
 
-    generator = PodcastGenerator(tts_provider=args.tts_provider)
+    generator = PodcastGenerator(
+        tts_provider=args.tts_provider,
+        llm_provider=args.llm_provider,
+        model=args.model,
+    )
     result = generator.generate_podcast(
         args.user,
         args.notebook,
