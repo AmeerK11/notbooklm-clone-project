@@ -426,6 +426,26 @@ IMPORTANT:
 - Make it sound like a real conversation, not a lecture
 """
 
+    @staticmethod
+    def _is_fatal_tts_error(exc: Exception) -> bool:
+        """
+        Detect provider/configuration errors where retrying further segments is pointless.
+        """
+        text = " ".join(str(exc).lower().split())
+        fatal_markers = [
+            "voice_not_found",
+            "no compatible elevenlabs synthesis method found",
+            "invalid_api_key",
+            "unauthorized",
+            "authentication",
+            "forbidden",
+            "insufficient_credits",
+            "quota",
+            "status_code: 401",
+            "status_code: 403",
+        ]
+        return any(marker in text for marker in fatal_markers)
+
     def _synthesize_segments(
         self,
         script: List[Dict[str, str]],
@@ -477,6 +497,9 @@ IMPORTANT:
                 )
                 self._last_tts_errors.append(error_detail)
                 print(f"  ⚠️  Failed {error_detail}")
+                if self._is_fatal_tts_error(e):
+                    print("  ⛔ Fatal TTS configuration/provider error detected. Stopping remaining segments.")
+                    break
                 continue
 
         return audio_files

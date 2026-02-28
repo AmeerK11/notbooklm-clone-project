@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import time
 from typing import Any
 
 import requests
@@ -693,6 +694,12 @@ elif page == "Notebooks":
                     if ok and isinstance(artifact_result, list):
                         artifacts = artifact_result
                         if artifacts:
+                            auto_refresh_key = f"auto_refresh_artifacts_{selected_notebook_id}"
+                            auto_refresh = st.checkbox(
+                                "Auto-refresh while artifacts are processing",
+                                value=bool(st.session_state.get(auto_refresh_key, True)),
+                                key=auto_refresh_key,
+                            )
                             st.dataframe(artifacts, use_container_width=True)
                             artifact_options = {
                                 f"{a['id']} - {a.get('type', 'unknown')} - {a.get('status', '')}": a
@@ -756,6 +763,19 @@ elif page == "Notebooks":
                                     st.info(f"Podcast status: {artifact_status}")
                             else:
                                 st.info("Select an artifact to preview.")
+
+                            in_flight = sum(
+                                1
+                                for a in artifacts
+                                if str(a.get("status", "")).lower() in {"pending", "processing"}
+                            )
+                            if auto_refresh and in_flight > 0:
+                                st.caption(
+                                    f"{in_flight} artifact(s) still processing. "
+                                    "Refreshing in 4 seconds..."
+                                )
+                                time.sleep(4)
+                                st.rerun()
                         else:
                             st.info("No artifacts generated yet.")
                     else:

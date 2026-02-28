@@ -12,6 +12,20 @@ load_dotenv()
 # TTS Provider type
 TTSProvider = Literal["openai", "elevenlabs", "edge"]
 
+# Common ElevenLabs preset voice name -> voice_id mapping.
+# This allows env values like "Rachel"/"Antoni" to work with SDK methods that require voice_id.
+ELEVENLABS_PRESET_VOICE_IDS: dict[str, str] = {
+    "rachel": "21m00Tcm4TlvDq8ikWAM",
+    "domi": "AZnzlk1XvdvUeBnXmlld",
+    "bella": "EXAVITQu4vr4xnSDxMaL",
+    "antoni": "ErXwobaYiN019PkySvjV",
+    "elli": "MF3mGyEYCl7XYWbV9V6O",
+    "josh": "TxGEqnHWrfWFTfGW9XjX",
+    "arnold": "VR6AewLTigWG4xSOukaG",
+    "adam": "pNInz6obpgDQGcFmaJgB",
+    "sam": "yoZ06aMxZJJ28mfd3POQ",
+}
+
 
 class TTSAdapter(ABC):
     """Base class for TTS providers."""
@@ -76,13 +90,27 @@ class ElevenLabsTTS(TTSAdapter):
 
     def _load_voice_aliases(self) -> dict[str, str]:
         """Best-effort map of configured voice names to voice IDs."""
+        aliases: dict[str, str] = dict(ELEVENLABS_PRESET_VOICE_IDS)
+
+        # First try the latest SDK shape.
         try:
-            response = self.client.voices.get_all()
+            voices_api = getattr(self.client, "voices", None)
+            if voices_api is None:
+                return aliases
+
+            if hasattr(voices_api, "get_all"):
+                response = voices_api.get_all()
+            elif hasattr(voices_api, "search"):
+                response = voices_api.search()
+            elif hasattr(voices_api, "list"):
+                response = voices_api.list()
+            else:
+                return aliases
+
             voices = getattr(response, "voices", response)
         except Exception:
-            return {}
+            return aliases
 
-        aliases: dict[str, str] = {}
         for voice in voices or []:
             if isinstance(voice, dict):
                 name = voice.get("name")
