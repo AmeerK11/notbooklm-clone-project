@@ -914,7 +914,28 @@ def _run_podcast_background(
             topic_focus=topic_focus,
         )
         if "error" in result:
-            crud.update_artifact(db, artifact_id, status="failed", error_message=result["error"])
+            transcript_markdown = ""
+            transcript_path = None
+            transcript = result.get("transcript")
+            if isinstance(transcript, list) and transcript:
+                transcript_markdown = generator.format_transcript_markdown(result)
+                transcript_path = generator.save_transcript(result, str(user_id), str(notebook_id))
+            crud.update_artifact(
+                db,
+                artifact_id,
+                status="failed",
+                error_message=result["error"],
+                content=(transcript_markdown or None),
+                metadata={
+                    "audio_path": None,
+                    "transcript_path": transcript_path,
+                    **(
+                        result.get("metadata", {})
+                        if isinstance(result.get("metadata"), dict)
+                        else {}
+                    ),
+                },
+            )
         else:
             transcript_markdown = generator.format_transcript_markdown(result)
             transcript_path = generator.save_transcript(result, str(user_id), str(notebook_id))

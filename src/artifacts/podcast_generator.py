@@ -142,10 +142,50 @@ class PodcastGenerator:
         # 3. Synthesize audio segments
         print(f"🎵 Synthesizing audio with {self.tts_provider}...")
         audio_segments = self._synthesize_segments(script, user_id, notebook_id, hosts)
+        if not audio_segments:
+            return {
+                "error": (
+                    "Transcript generated but audio synthesis failed for all segments. "
+                    "Check TTS provider credentials, quota, and configured voices."
+                ),
+                "transcript": script,
+                "audio_path": None,
+                "metadata": {
+                    "notebook_id": notebook_id,
+                    "duration_target": duration_target,
+                    "hosts": hosts,
+                    "tts_provider": self.tts_provider,
+                    "llm_provider": self.llm_provider,
+                    "llm_model": self.model,
+                    "num_segments": len(script),
+                    "topic_focus": topic_focus,
+                    "generated_at": datetime.utcnow().isoformat(),
+                },
+            }
 
         # 4. Combine audio
         print("🔗 Combining audio segments...")
         final_audio = self._combine_audio(audio_segments, user_id, notebook_id)
+        if not final_audio or not Path(final_audio).exists():
+            return {
+                "error": (
+                    "Transcript generated but final audio file was not created. "
+                    "Check ffmpeg/pydub setup and TTS output."
+                ),
+                "transcript": script,
+                "audio_path": None,
+                "metadata": {
+                    "notebook_id": notebook_id,
+                    "duration_target": duration_target,
+                    "hosts": hosts,
+                    "tts_provider": self.tts_provider,
+                    "llm_provider": self.llm_provider,
+                    "llm_model": self.model,
+                    "num_segments": len(script),
+                    "topic_focus": topic_focus,
+                    "generated_at": datetime.utcnow().isoformat(),
+                },
+            }
 
         return {
             "transcript": script,

@@ -192,6 +192,7 @@ class TestPodcastGenerator:
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "data"),
             "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
             "TTS_PROVIDER": "edge",
             **(extra_env or {}),
         }
@@ -209,10 +210,12 @@ class TestPodcastGenerator:
         mock_llm_resp = _make_openai_chat_response(MOCK_PODCAST_LLM_RESPONSE)
 
         fake_audio = str(tmp_path / "podcast.mp3")
+        pathlib.Path(fake_audio).write_bytes(b"fake-audio")
 
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "data"),
             "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
             "TTS_PROVIDER": "edge",
         }
         with patch.dict(os.environ, env):
@@ -245,6 +248,7 @@ class TestPodcastGenerator:
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "nonexistent"),
             "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
             "TTS_PROVIDER": "edge",
         }
         with patch.dict(os.environ, env):
@@ -266,6 +270,7 @@ class TestPodcastGenerator:
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "data"),
             "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
             "TTS_PROVIDER": "edge",
         }
         with patch.dict(os.environ, env):
@@ -287,7 +292,11 @@ class TestPodcastGenerator:
             "metadata": {"duration_target": "5min"},
         }
 
-        env = {"OPENAI_API_KEY": "test-key", "TTS_PROVIDER": "edge"}
+        env = {
+            "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
+            "TTS_PROVIDER": "edge",
+        }
         with patch.dict(os.environ, env):
             with patch("src.artifacts.tts_adapter.EdgeTTS"):
                 with patch("src.artifacts.podcast_generator.OpenAI"):
@@ -314,6 +323,7 @@ class TestPodcastGenerator:
         env = {
             "STORAGE_BASE_DIR": str(tmp_path / "data"),
             "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
             "TTS_PROVIDER": "edge",
         }
         with patch.dict(os.environ, env):
@@ -336,3 +346,36 @@ class TestPodcastGenerator:
                                 )
 
         assert result["metadata"]["topic_focus"] == "neural networks"
+
+    def test_generate_podcast_when_tts_fails_returns_error_with_transcript(self, tmp_path):
+        """If TTS produces no audio segments, generator returns an explicit error."""
+        _chroma_dir(tmp_path)
+
+        mock_store = MagicMock()
+        mock_store.query.return_value = MOCK_CHROMA_RESULTS
+        mock_llm_resp = _make_openai_chat_response(MOCK_PODCAST_LLM_RESPONSE)
+
+        env = {
+            "STORAGE_BASE_DIR": str(tmp_path / "data"),
+            "OPENAI_API_KEY": "test-key",
+            "TRANSCRIPT_LLM_PROVIDER": "openai",
+            "TTS_PROVIDER": "edge",
+        }
+        with patch.dict(os.environ, env):
+            with patch("src.artifacts.tts_adapter.EdgeTTS"):
+                with patch(
+                    "src.artifacts.podcast_generator.ChromaAdapter", return_value=mock_store
+                ):
+                    with patch("src.artifacts.podcast_generator.OpenAI") as mock_openai_cls:
+                        mock_client = MagicMock()
+                        mock_client.chat.completions.create.return_value = mock_llm_resp
+                        mock_openai_cls.return_value = mock_client
+
+                        gen = PodcastGenerator()
+                        with patch.object(gen, "_synthesize_segments", return_value=[]):
+                            result = gen.generate_podcast(user_id="1", notebook_id="1")
+
+        assert "error" in result
+        assert "audio synthesis failed" in str(result["error"]).lower()
+        assert isinstance(result.get("transcript"), list)
+        assert len(result["transcript"]) > 0

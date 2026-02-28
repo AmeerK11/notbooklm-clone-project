@@ -45,8 +45,10 @@ def test_podcast_generator_ollama_provider_without_openai_key(tmp_path):
 
                     with patch("src.artifacts.podcast_generator.requests.post", return_value=mock_resp):
                         generator = PodcastGenerator(llm_provider="ollama")
-                        with patch.object(generator, "_synthesize_segments", return_value=[]):
-                            with patch.object(generator, "_combine_audio", return_value=""):
+                        fake_audio = str(tmp_path / "ollama_podcast.mp3")
+                        pathlib.Path(fake_audio).write_bytes(b"audio")
+                        with patch.object(generator, "_synthesize_segments", return_value=[fake_audio]):
+                            with patch.object(generator, "_combine_audio", return_value=fake_audio):
                                 result = generator.generate_podcast("1", "1")
 
     assert "error" not in result
@@ -84,8 +86,10 @@ def test_podcast_generator_groq_provider_without_openai_key(tmp_path):
                         mock_groq_cls.return_value = mock_groq
 
                         generator = PodcastGenerator(llm_provider="groq")
-                        with patch.object(generator, "_synthesize_segments", return_value=[]):
-                            with patch.object(generator, "_combine_audio", return_value=""):
+                        fake_audio = str(tmp_path / "groq_podcast.mp3")
+                        pathlib.Path(fake_audio).write_bytes(b"audio")
+                        with patch.object(generator, "_synthesize_segments", return_value=[fake_audio]):
+                            with patch.object(generator, "_combine_audio", return_value=fake_audio):
                                 result = generator.generate_podcast("1", "1")
 
     assert "error" not in result

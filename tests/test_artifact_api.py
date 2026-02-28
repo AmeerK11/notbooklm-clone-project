@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from data.db import Base, get_db
 from data import crud
+import app as app_module
 from app import app
 
 
@@ -245,6 +246,45 @@ class TestPodcastEndpoint:
 
         data = resp.json()
         assert data["metadata"]["topic_focus"] == "neural nets"
+
+    def test_background_podcast_failure_persists_transcript(self, notebook, db_session):
+        """If audio fails but transcript exists, artifact should be failed with transcript content."""
+        artifact = crud.create_artifact(
+            db=db_session,
+            notebook_id=notebook.id,
+            artifact_type="podcast",
+            metadata={"duration": "5min"},
+        )
+
+        result_payload = {
+            "error": "Transcript generated but audio synthesis failed for all segments.",
+            "transcript": [{"speaker": "Alex", "text": "Intro text"}],
+            "audio_path": None,
+            "metadata": {"tts_provider": "elevenlabs"},
+        }
+
+        with patch("app.PodcastGenerator") as MockGen, patch("app.SessionLocal", return_value=db_session):
+            mock_gen = MagicMock()
+            mock_gen.generate_podcast.return_value = result_payload
+            mock_gen.format_transcript_markdown.return_value = "# Podcast Transcript\n\n**Alex:** Intro text"
+            mock_gen.save_transcript.return_value = "/tmp/transcript.md"
+            MockGen.return_value = mock_gen
+
+            app_module._run_podcast_background(
+                artifact_id=artifact.id,
+                user_id=1,
+                notebook_id=notebook.id,
+                duration="5min",
+                topic_focus=None,
+            )
+
+        updated = crud.get_artifact(db_session, artifact.id)
+        assert updated is not None
+        assert updated.status == "failed"
+        assert updated.content is not None
+        assert "Podcast Transcript" in updated.content
+        assert updated.error_message is not None
+        assert "audio synthesis failed" in updated.error_message.lower()
 
 
 # ── List artifacts tests ──────────────────────────────────────────────────────
