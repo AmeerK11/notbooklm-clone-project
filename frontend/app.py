@@ -346,6 +346,11 @@ def inject_theme() -> None:
                 transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
                 box-shadow: 0 3px 10px rgba(15, 95, 87, 0.22);
             }
+            div.stButton > button *,
+            div.stFormSubmitButton > button *,
+            div.stDownloadButton > button * {
+                color: #f4fffd !important;
+            }
 
             div.stButton > button:hover,
             div.stFormSubmitButton > button:hover,
@@ -370,11 +375,39 @@ def inject_theme() -> None:
                 border: 1px solid #90c6bb;
                 box-shadow: none;
             }
+            [data-testid="stSidebar"] div.stButton > button *,
+            [data-testid="stSidebar"] div.stFormSubmitButton > button *,
+            [data-testid="stSidebar"] div.stDownloadButton > button * {
+                color: #123f3b !important;
+            }
 
             [data-testid="stSidebar"] div.stButton > button:hover,
             [data-testid="stSidebar"] div.stFormSubmitButton > button:hover,
             [data-testid="stSidebar"] div.stDownloadButton > button:hover {
                 background: linear-gradient(135deg, #f5fffc 0%, #e3f8f3 100%);
+            }
+
+            /* Streamlit base button variants (primary/secondary/tertiary) */
+            button[data-testid^="stBaseButton"] {
+                color: #143a36 !important;
+            }
+            [data-testid="stSidebar"] button[data-testid^="stBaseButton"] {
+                color: #123f3b !important;
+            }
+            button[data-testid^="stBaseButton"] * {
+                color: inherit !important;
+            }
+
+            /* Keep form controls readable across theme overrides */
+            .stTextInput input,
+            .stTextArea textarea,
+            .stNumberInput input,
+            div[data-baseweb="select"] > div {
+                color: #162525 !important;
+            }
+            .stTextInput input::placeholder,
+            .stTextArea textarea::placeholder {
+                color: #5a6a69 !important;
             }
 
             [data-testid="stDataFrame"] {
@@ -483,9 +516,6 @@ def choose_artifact_for_notebook(notebook_id: int, artifacts: list[dict[str, Any
 
 inject_theme()
 
-if "page" not in st.session_state:
-    st.session_state["page"] = "Home"
-
 if "attempted_auto_dev_login" not in st.session_state:
     st.session_state["attempted_auto_dev_login"] = False
 if "bridge_error" not in st.session_state:
@@ -563,13 +593,6 @@ with st.sidebar:
     else:
         st.warning("Authentication is not configured.")
 
-    st.divider()
-    page_options = ["Home", "Notebooks"]
-    default_page = st.session_state.get("page", "Home")
-    default_index = page_options.index(default_page) if default_page in page_options else 0
-    page = st.radio("Go to", page_options, index=default_index)
-    st.session_state["page"] = page
-
     selected_notebook_id = st.session_state.get("selected_notebook_id")
     selected_notebook_title = st.session_state.get("selected_notebook_title")
     if selected_notebook_id:
@@ -607,30 +630,8 @@ if not authenticated:
     st.info("Sign in to continue.")
     st.stop()
 
-if page == "Home":
-    st.subheader("Home")
-    st.markdown(
-        "<div class='soft-card'>Use this page to verify backend connectivity and auth status before working in notebooks.</div>",
-        unsafe_allow_html=True,
-    )
-
-    ok, result, _ = api_get("/health")
-    metric_col_1, metric_col_2, metric_col_3 = st.columns(3)
-    with metric_col_1:
-        render_metric_card("Auth Mode", hero_mode)
-    with metric_col_2:
-        render_metric_card("Session", "Signed in" if authenticated else "Signed out")
-    with metric_col_3:
-        render_metric_card("Backend", "Healthy" if ok else "Unavailable")
-
-    if ok:
-        st.success("Backend health check passed.")
-        st.json(result)
-    else:
-        st.error("Backend health check failed.")
-        st.code(str(result))
-
-elif page == "Notebooks":
+page = "Notebooks"
+if page == "Notebooks":
     st.subheader("Notebooks")
     st.markdown(
         "<div class='soft-card'>Create or open a notebook, ingest sources, then use chat and artifact tools from one workspace.</div>",
@@ -697,7 +698,6 @@ elif page == "Notebooks":
             if st.button("Open notebook"):
                 st.session_state["selected_notebook_id"] = selected["id"]
                 st.session_state["selected_notebook_title"] = selected["title"]
-                st.session_state["page"] = "Notebooks"
                 st.rerun()
 
             selected_notebook_id = st.session_state.get("selected_notebook_id")
