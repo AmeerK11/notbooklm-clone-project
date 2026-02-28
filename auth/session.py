@@ -15,6 +15,7 @@ from data.db import get_db
 AUTH_MODE_DEV = "dev"
 AUTH_MODE_HF = "hf_oauth"
 AUTH_BRIDGE_SALT = "streamlit-auth-bridge"
+DEFAULT_DEV_SESSION_SECRET = "dev-only-session-secret-change-me"
 
 
 @dataclass(frozen=True)
@@ -36,18 +37,31 @@ def get_auth_mode() -> str:
 
 def configure_session_middleware(app) -> None:
     """Attach Starlette session middleware once during app setup."""
-    secret = os.getenv("APP_SESSION_SECRET", "dev-only-session-secret-change-me")
+    secret = os.getenv("APP_SESSION_SECRET", DEFAULT_DEV_SESSION_SECRET).strip()
+    auth_mode = get_auth_mode()
+    if auth_mode == AUTH_MODE_HF and (not secret or secret == DEFAULT_DEV_SESSION_SECRET):
+        raise RuntimeError("APP_SESSION_SECRET must be set to a non-default value in hf_oauth mode.")
+    same_site = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
+    if same_site not in {"lax", "strict", "none"}:
+        same_site = "lax"
+    secure_default = "1" if auth_mode == AUTH_MODE_HF else "0"
+    https_only = os.getenv("SESSION_COOKIE_SECURE", secure_default).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     app.add_middleware(
         SessionMiddleware,
         secret_key=secret,
-        same_site="lax",
-        https_only=False,
+        same_site=same_site,
+        https_only=https_only,
         max_age=60 * 60 * 24 * 7,  # 7 days
     )
 
 
 def _bridge_serializer() -> URLSafeTimedSerializer:
-    secret = os.getenv("APP_SESSION_SECRET", "dev-only-session-secret-change-me")
+    secret = os.getenv("APP_SESSION_SECRET", DEFAULT_DEV_SESSION_SECRET)
     return URLSafeTimedSerializer(secret_key=secret, salt=AUTH_BRIDGE_SALT)
 
 

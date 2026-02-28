@@ -3,6 +3,7 @@ Integration tests for notebook rename/delete management endpoints.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 from unittest.mock import patch
@@ -15,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import app as app_module
 from app import app
 from data.db import Base, get_db
 
@@ -43,9 +45,11 @@ def db_session(db_engine):
 
 
 @pytest.fixture()
-def client(db_session, monkeypatch):
+def client(db_session, monkeypatch, tmp_path):
     monkeypatch.setenv("AUTH_MODE", "dev")
     monkeypatch.setenv("APP_SESSION_SECRET", "notebook-mgmt-test-secret")
+    monkeypatch.setenv("STORAGE_BASE_DIR", str(tmp_path / "storage"))
+    monkeypatch.setattr("app.UPLOADS_ROOT", tmp_path / "uploads")
 
     def _override_get_db():
         yield db_session
@@ -179,3 +183,44 @@ def test_create_url_source_accepts_public_url(client):
     assert payload["status"] == "ready"
     assert payload["ingested_at"] is not None
     mock_ingest.assert_called_once()
+
+
+def test_upload_source_sanitizes_filename(client):
+    create_resp = client.post("/notebooks", json={"title": "Uploads"})
+    assert create_resp.status_code == 200
+    notebook_id = create_resp.json()["id"]
+
+    with patch("app.ingest_source", return_value=1):
+        upload_resp = client.post(
+            f"/notebooks/{notebook_id}/sources/upload",
+            data={"status": "pending"},
+            files={"file": ("../../../../evil.txt", b"hello world", "text/plain")},
+        )
+
+    assert upload_resp.status_code == 200
+    payload = upload_resp.json()
+    assert payload["original_name"] == "evil.txt"
+    assert payload["storage_path"] is not None
+    assert ".." not in payload["storage_path"]
+    assert f"notebook_{notebook_id}" in payload["storage_path"]
+    assert pathlib.Path(payload["storage_path"]).exists()
+
+
+def test_delete_notebook_removes_notebook_storage_and_uploads(client):
+    create_resp = client.post("/notebooks", json={"title": "Delete storage"})
+    assert create_resp.status_code == 200
+    notebook_id = create_resp.json()["id"]
+
+    storage_root = pathlib.Path(os.environ["STORAGE_BASE_DIR"]) / "users" / "1" / "notebooks" / str(notebook_id)
+    storage_root.mkdir(parents=True, exist_ok=True)
+    (storage_root / "marker.txt").write_text("x", encoding="utf-8")
+
+    upload_root = pathlib.Path(app_module.UPLOADS_ROOT) / f"notebook_{notebook_id}"
+    upload_root.mkdir(parents=True, exist_ok=True)
+    (upload_root / "upload.txt").write_text("x", encoding="utf-8")
+
+    delete_resp = client.delete(f"/notebooks/{notebook_id}")
+    assert delete_resp.status_code == 200
+
+    assert not storage_root.exists()
+    assert not upload_root.exists()

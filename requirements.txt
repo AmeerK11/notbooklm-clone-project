@@ -25,6 +25,7 @@ nltk
 tqdm
 pytest
 edge-tts
+elevenlabs>=1.0.0
 pydub
 ffmpeg-python
 # NOTE: install ffmpeg system binary separately (e.g., `brew install ffmpeg`)

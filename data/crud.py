@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from data.models import Artifact
 from sqlalchemy.orm import Session
@@ -211,6 +212,33 @@ def create_message_citations(
     for row in rows:
         db.refresh(row)
     return rows
+
+
+def list_message_citations_for_thread(
+    db: Session, thread_id: int
+) -> dict[int, list[dict[str, int | str | float | None]]]:
+    rows = (
+        db.query(MessageCitation, Source.title)
+        .join(Source, Source.id == MessageCitation.source_id)
+        .join(Message, Message.id == MessageCitation.message_id)
+        .filter(Message.thread_id == thread_id)
+        .order_by(MessageCitation.id.asc())
+        .all()
+    )
+
+    citations_by_message: dict[int, list[dict[str, int | str | float | None]]] = defaultdict(list)
+    for citation, source_title in rows:
+        citations_by_message[int(citation.message_id)].append(
+            {
+                "source_id": int(citation.source_id),
+                "source_title": source_title,
+                "chunk_ref": citation.chunk_ref,
+                "quote": citation.quote,
+                "score": citation.score,
+            }
+        )
+    return dict(citations_by_message)
+
 
 def get_artifact(db: Session, artifact_id: int) -> Artifact | None:
     return db.get(Artifact, artifact_id)

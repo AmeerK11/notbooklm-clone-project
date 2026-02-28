@@ -525,8 +525,12 @@ elif page == "Notebooks":
                             for msg in message_result:
                                 role = msg.get("role", "unknown")
                                 content = msg.get("content", "")
+                                citations = msg.get("citations", [])
                                 if role == "assistant":
                                     st.markdown(f"**Assistant:** {content}")
+                                    if isinstance(citations, list) and citations:
+                                        with st.expander("Citations", expanded=False):
+                                            st.dataframe(citations, use_container_width=True)
                                 else:
                                     st.markdown(f"**You:** {content}")
                         else:

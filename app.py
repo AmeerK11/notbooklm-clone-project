@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import os
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import uuid4
 
 from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
@@ -101,20 +104,21 @@ class ThreadResponse(BaseModel):
     created_at: datetime
 
 
-class MessageResponse(BaseModel):
-    id: int
-    thread_id: int
-    role: str
-    content: str
-    created_at: datetime
-
-
 class CitationResponse(BaseModel):
     source_title: str | None = None
     source_id: int
     chunk_ref: str | None = None
     quote: str | None = None
     score: float | None = None
+
+
+class MessageResponse(BaseModel):
+    id: int
+    thread_id: int
+    role: str
+    content: str
+    created_at: datetime
+    citations: list[CitationResponse] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -191,6 +195,9 @@ class ArtifactResponse(BaseModel):
 
 MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS_PER_MESSAGE = 1000
+MAX_UPLOAD_FILENAME_LENGTH = 255
+SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+UPLOADS_ROOT = Path("uploads")
 
 
 def _build_conversation_history(
@@ -244,6 +251,53 @@ def _append_query_param(url: str, key: str, value: str) -> str:
     query_items[key] = value
     updated_query = urlencode(query_items)
     return urlunsplit((split.scheme, split.netloc, split.path, updated_query, split.fragment))
+
+
+def _sanitize_upload_filename(filename: str | None) -> str:
+    raw_name = Path(str(filename or "")).name.replace("\x00", "").strip()
+    sanitized = SAFE_FILENAME_RE.sub("_", raw_name).strip("._-")
+    if not sanitized:
+        sanitized = f"upload_{uuid4().hex[:10]}.bin"
+    if len(sanitized) > MAX_UPLOAD_FILENAME_LENGTH:
+        ext = Path(sanitized).suffix[:20]
+        stem_limit = max(1, MAX_UPLOAD_FILENAME_LENGTH - len(ext))
+        sanitized = f"{Path(sanitized).stem[:stem_limit]}{ext}"
+    return sanitized
+
+
+def _resolve_notebook_upload_path(notebook_id: int, filename: str | None) -> Path:
+    upload_dir = UPLOADS_ROOT / f"notebook_{notebook_id}"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir_resolved = upload_dir.resolve()
+
+    safe_name = _sanitize_upload_filename(filename)
+    destination = (upload_dir_resolved / safe_name).resolve()
+    if destination.parent != upload_dir_resolved:
+        raise HTTPException(status_code=400, detail="Invalid upload filename.")
+
+    if destination.exists():
+        destination = (upload_dir_resolved / f"{destination.stem}_{uuid4().hex[:8]}{destination.suffix}").resolve()
+    return destination
+
+
+def _remove_tree_within_root(root: Path, target: Path) -> None:
+    if not target.exists():
+        return
+    root_resolved = root.resolve()
+    target_resolved = target.resolve()
+    if target_resolved == root_resolved or root_resolved not in target_resolved.parents:
+        raise RuntimeError(f"Refusing to delete path outside root: {target_resolved}")
+    shutil.rmtree(target_resolved)
+
+
+def _cleanup_notebook_storage(owner_user_id: int, notebook_id: int) -> None:
+    storage_base = Path(os.getenv("STORAGE_BASE_DIR", "data"))
+    notebook_root = storage_base / "users" / str(owner_user_id) / "notebooks"
+    notebook_path = notebook_root / str(notebook_id)
+    _remove_tree_within_root(notebook_root, notebook_path)
+
+    upload_path = UPLOADS_ROOT / f"notebook_{notebook_id}"
+    _remove_tree_within_root(UPLOADS_ROOT, upload_path)
 
 
 @app.get("/health", tags=["system"])
@@ -461,6 +515,11 @@ def delete_notebook(
     if notebook is None:
         raise HTTPException(status_code=404, detail="Notebook not found for this user.")
 
+    try:
+        _cleanup_notebook_storage(owner_user_id=current_user.id, notebook_id=notebook_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete notebook storage: {exc}") from exc
+
     crud.delete_notebook(db=db, notebook=notebook)
     return NotebookDeleteResponse(status="deleted", notebook_id=notebook_id)
 
@@ -544,18 +603,18 @@ async def upload_source_for_notebook(
     if notebook is None:
         raise HTTPException(status_code=404, detail="Notebook not found for this user.")
 
-    upload_dir = Path("uploads") / f"notebook_{notebook_id}"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    destination = upload_dir / file.filename
+    destination = _resolve_notebook_upload_path(notebook_id=notebook_id, filename=file.filename)
     content = await file.read()
     destination.write_bytes(content)
+    original_name = Path(str(file.filename or destination.name)).name
+    source_title = title or original_name or destination.name
 
     source = crud.create_source(
         db=db,
         notebook_id=notebook_id,
         source_type="file",
-        title=title or file.filename,
-        original_name=file.filename,
+        title=source_title,
+        original_name=original_name,
         url=None,
         storage_path=str(destination),
         status=status,
@@ -680,9 +739,25 @@ def list_messages_for_thread(
         raise HTTPException(status_code=404, detail="Thread not found for this notebook.")
 
     messages = crud.list_messages_for_thread(db=db, thread_id=thread_id)
+    citations_by_message = crud.list_message_citations_for_thread(db=db, thread_id=thread_id)
     return [
         MessageResponse(
-            id=m.id, thread_id=m.thread_id, role=m.role, content=m.content, created_at=m.created_at
+            id=m.id,
+            thread_id=m.thread_id,
+            role=m.role,
+            content=m.content,
+            created_at=m.created_at,
+            citations=[
+                CitationResponse(
+                    source_title=entry.get("source_title"),
+                    source_id=int(entry.get("source_id", 0)),
+                    chunk_ref=(str(entry.get("chunk_ref")) if entry.get("chunk_ref") else None),
+                    quote=(str(entry.get("quote")) if entry.get("quote") else None),
+                    score=(float(entry["score"]) if entry.get("score") is not None else None),
+                )
+                for entry in citations_by_message.get(m.id, [])
+                if int(entry.get("source_id", 0)) > 0
+            ],
         )
         for m in messages
     ]
@@ -783,6 +858,7 @@ def chat_on_thread(
             role=user_message.role,
             content=user_message.content,
             created_at=user_message.created_at,
+            citations=[],
         ),
         assistant_message=MessageResponse(
             id=assistant_message.id,
@@ -790,6 +866,7 @@ def chat_on_thread(
             role=assistant_message.role,
             content=assistant_message.content,
             created_at=assistant_message.created_at,
+            citations=citations,
         ),
         citations=citations,
     )

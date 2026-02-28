@@ -2,79 +2,82 @@
 
 ```mermaid
 erDiagram
-    users ||--o{ oauth_accounts : has
-    users ||--o{ documents : owns
-    users ||--o{ conversations : owns
-    documents ||--o{ chunks : contains
-    conversations ||--o{ messages : contains
+    users ||--o{ notebooks : owns
+    notebooks ||--o{ sources : contains
+    notebooks ||--o{ chat_threads : has
+    chat_threads ||--o{ messages : contains
+    messages ||--o{ message_citations : has
+    sources ||--o{ message_citations : cited_by
+    notebooks ||--o{ artifacts : generates
 
     users {
         int id PK
         string email UK
         string display_name
         string avatar_url
-        boolean is_active
         datetime created_at
-        datetime updated_at
     }
 
-    oauth_accounts {
+    notebooks {
         int id PK
-        int user_id FK
-        string provider
-        string provider_user_id
-        string username
-        text access_token
-        text refresh_token
-        string token_type
-        text scope
-        datetime expires_at
-        datetime created_at
-        datetime updated_at
-    }
-
-    documents {
-        int id PK
-        int user_id FK
+        int owner_user_id FK
         string title
-        string source_filename
-        string source_type
+        datetime created_at
+        datetime updated_at
+    }
+
+    sources {
+        int id PK
+        int notebook_id FK
+        string type
+        string title
+        string original_name
+        string url
         string storage_path
-        text summary
-        datetime created_at
-        datetime updated_at
+        string status
+        datetime ingested_at
     }
 
-    chunks {
+    chat_threads {
         int id PK
-        int document_id FK
-        int chunk_index
-        text content
-        int token_count
-        string embedding_id
-        datetime created_at
-    }
-
-    conversations {
-        int id PK
-        int user_id FK
+        int notebook_id FK
         string title
         datetime created_at
-        datetime updated_at
     }
 
     messages {
         int id PK
-        int conversation_id FK
+        int thread_id FK
         string role
         text content
-        json citations
         datetime created_at
+    }
+
+    message_citations {
+        int id PK
+        int message_id FK
+        int source_id FK
+        string chunk_ref
+        text quote
+        float score
+    }
+
+    artifacts {
+        int id PK
+        int notebook_id FK
+        string type
+        string title
+        string status
+        string file_path
+        json metadata
+        text content
+        text error_message
+        datetime created_at
+        datetime generated_at
     }
 ```
 
 ## Notes
-- `oauth_accounts.provider` supports Hugging Face (`"huggingface"`).
-- Composite unique constraints are documented in `DATABASE_SCHEMA.md`:
-  - `uq_provider_user` on (`provider`, `provider_user_id`)
-  - `uq_document_chunk_index` on (`document_id`, `chunk_index`)
+- User isolation is enforced through ownership on `notebooks.owner_user_id`.
+- Thread, source, citation, and artifact records are notebook-scoped.
+- Artifact metadata is stored in JSON (`artifacts.metadata`).
