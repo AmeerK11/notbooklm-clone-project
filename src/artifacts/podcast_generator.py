@@ -76,6 +76,7 @@ class PodcastGenerator:
         tts_provider = tts_provider or os.getenv("TTS_PROVIDER", "edge")
         self.tts = get_tts_adapter(tts_provider)
         self.tts_provider = tts_provider
+        self._last_tts_errors: List[str] = []
 
         # Default settings from .env
         self.default_duration = os.getenv("DEFAULT_PODCAST_DURATION", "5min")
@@ -141,13 +142,18 @@ class PodcastGenerator:
 
         # 3. Synthesize audio segments
         print(f"🎵 Synthesizing audio with {self.tts_provider}...")
+        self._last_tts_errors = []
         audio_segments = self._synthesize_segments(script, user_id, notebook_id, hosts)
         if not audio_segments:
+            tts_error_preview = "; ".join(self._last_tts_errors[:3]).strip()
+            failure_message = (
+                "Transcript generated but audio synthesis failed for all segments. "
+                "Check TTS provider credentials, quota, and configured voices."
+            )
+            if tts_error_preview:
+                failure_message = f"{failure_message} Provider errors: {tts_error_preview}"
             return {
-                "error": (
-                    "Transcript generated but audio synthesis failed for all segments. "
-                    "Check TTS provider credentials, quota, and configured voices."
-                ),
+                "error": failure_message,
                 "transcript": script,
                 "audio_path": None,
                 "metadata": {
@@ -159,6 +165,7 @@ class PodcastGenerator:
                     "llm_model": self.model,
                     "num_segments": len(script),
                     "topic_focus": topic_focus,
+                    "tts_errors": self._last_tts_errors[:20],
                     "generated_at": datetime.utcnow().isoformat(),
                 },
             }
@@ -449,6 +456,7 @@ IMPORTANT:
         voices = voice_maps.get(self.tts_provider, voice_maps["edge"])
 
         audio_files: List[str] = []
+        self._last_tts_errors = []
         total = len(script)
 
         for i, segment in enumerate(script, 1):
@@ -463,7 +471,12 @@ IMPORTANT:
                 audio_files.append(output_path)
                 print(f"  ✓ Segment {i}/{total}: {speaker}")
             except Exception as e:
-                print(f"  ⚠️  Failed segment {i}: {e}")
+                error_detail = (
+                    f"segment={i}/{total}, speaker={speaker}, voice={voice}, "
+                    f"error={type(e).__name__}: {' '.join(str(e).split())}"
+                )
+                self._last_tts_errors.append(error_detail)
+                print(f"  ⚠️  Failed {error_detail}")
                 continue
 
         return audio_files
