@@ -180,11 +180,21 @@ def inject_theme() -> None:
 
             .stApp {
                 background:
-                    radial-gradient(circle at 15% -5%, #fff3de 0%, rgba(255, 243, 222, 0) 40%),
-                    radial-gradient(circle at 88% 8%, #d9efeb 0%, rgba(217, 239, 235, 0) 42%),
+                    radial-gradient(circle at 15% -5%, #fff5e6 0%, rgba(255, 245, 230, 0) 42%),
+                    radial-gradient(circle at 88% 8%, #dff2ee 0%, rgba(223, 242, 238, 0) 44%),
                     linear-gradient(180deg, #f8faf8 0%, #f1f5f2 100%);
                 color: var(--ink);
                 font-family: "IBM Plex Sans", sans-serif;
+            }
+
+            .main .block-container {
+                max-width: 1180px;
+                padding-top: 1rem;
+                padding-bottom: 2rem;
+            }
+
+            p, li, label, [data-testid="stMarkdownContainer"] p {
+                line-height: 1.5;
             }
 
             [data-testid="stSidebar"] {
@@ -315,6 +325,15 @@ def inject_theme() -> None:
                 color: #485a63;
             }
 
+            [data-testid="stText"] {
+                color: var(--ink-muted);
+            }
+
+            [role="radiogroup"] > label {
+                margin-right: 0.8rem;
+                padding: 0.2rem 0.1rem;
+            }
+
             div.stButton > button,
             div.stFormSubmitButton > button,
             div.stDownloadButton > button {
@@ -357,6 +376,12 @@ def inject_theme() -> None:
             [data-testid="stSidebar"] div.stDownloadButton > button:hover {
                 background: linear-gradient(135deg, #f5fffc 0%, #e3f8f3 100%);
             }
+
+            [data-testid="stDataFrame"] {
+                border: 1px solid var(--card-border);
+                border-radius: 12px;
+                overflow: hidden;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -395,6 +420,34 @@ def build_artifact_option_label(artifact: dict[str, Any]) -> str:
     icon = STATUS_ICONS.get(status, "•")
     label = STATUS_LABELS.get(status, str(artifact.get("status", "unknown")).title())
     return f"#{art_id} · {art_type} · {icon} {label}"
+
+
+def choose_workspace_section(notebook_id: int) -> str:
+    options = ["Source Library", "Chat Workspace", "Artifact Studio"]
+    key = f"workspace_section_{notebook_id}"
+    default_value = st.session_state.get(key, options[0])
+    if default_value not in options:
+        default_value = options[0]
+
+    if hasattr(st, "segmented_control"):
+        selected = st.segmented_control(
+            "Workspace sections",
+            options=options,
+            default=default_value,
+            key=key,
+        )
+    else:
+        selected = st.radio(
+            "Workspace sections",
+            options=options,
+            index=options.index(default_value),
+            key=key,
+            horizontal=True,
+        )
+
+    if selected not in options:
+        return options[0]
+    return str(selected)
 
 
 inject_theme()
@@ -670,11 +723,10 @@ elif page == "Notebooks":
                             st.error("Failed to delete notebook.")
                             st.code(str(delete_result))
 
-                source_tab, chat_tab, artifacts_tab = st.tabs(
-                    ["Source Library", "Chat Workspace", "Artifact Studio"]
-                )
+                workspace_section = choose_workspace_section(int(selected_notebook_id))
+                st.caption("Switch sections to focus on one workflow at a time.")
 
-                with source_tab:
+                if workspace_section == "Source Library":
                     st.markdown(
                         "<div class='soft-card'>Upload files or add links. Ingested sources are scoped to this notebook.</div>",
                         unsafe_allow_html=True,
@@ -802,7 +854,7 @@ elif page == "Notebooks":
                                 st.error("Failed to fetch sources.")
                                 st.code(str(source_result))
 
-                with chat_tab:
+                elif workspace_section == "Chat Workspace":
                     st.markdown(
                         "<div class='soft-card'>Ask questions grounded in your selected notebook sources. Citations are shown per assistant response.</div>",
                         unsafe_allow_html=True,
@@ -903,7 +955,7 @@ elif page == "Notebooks":
                     else:
                         st.info("Create a thread to start chatting.")
 
-                with artifacts_tab:
+                else:
                     st.markdown(
                         "<div class='soft-card'>Generate structured outputs from notebook context and track progress here.</div>",
                         unsafe_allow_html=True,
