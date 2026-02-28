@@ -191,9 +191,29 @@ def inject_theme() -> None:
                 background: linear-gradient(180deg, #173436 0%, #11292b 100%);
             }
 
-            [data-testid="stSidebar"] * {
-                color: #e9f1ef !important;
+            [data-testid="stSidebar"] h1,
+            [data-testid="stSidebar"] h2,
+            [data-testid="stSidebar"] h3,
+            [data-testid="stSidebar"] h4,
+            [data-testid="stSidebar"] label,
+            [data-testid="stSidebar"] p,
+            [data-testid="stSidebar"] small,
+            [data-testid="stSidebar"] span {
+                color: #e9f1ef;
                 font-family: "IBM Plex Sans", sans-serif;
+            }
+
+            [data-testid="stSidebar"] .stTextInput input,
+            [data-testid="stSidebar"] .stTextArea textarea,
+            [data-testid="stSidebar"] div[data-baseweb="select"] > div,
+            [data-testid="stSidebar"] .stNumberInput input {
+                background: rgba(233, 241, 239, 0.1);
+                color: #f3f8f7;
+                border: 1px solid rgba(178, 209, 202, 0.35);
+            }
+
+            [data-testid="stSidebar"] div[data-baseweb="select"] * {
+                color: #0f2a27;
             }
 
             h1, h2, h3, h4 {
@@ -293,6 +313,49 @@ def inject_theme() -> None:
                 background: var(--pending-soft);
                 border-color: var(--pending-border);
                 color: #485a63;
+            }
+
+            div.stButton > button,
+            div.stFormSubmitButton > button,
+            div.stDownloadButton > button {
+                border-radius: 11px;
+                border: 1px solid #0f5f57;
+                background: linear-gradient(135deg, #167269 0%, #0f5f57 100%);
+                color: #f4fffd !important;
+                font-weight: 600;
+                padding: 0.38rem 0.95rem;
+                transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+                box-shadow: 0 3px 10px rgba(15, 95, 87, 0.22);
+            }
+
+            div.stButton > button:hover,
+            div.stFormSubmitButton > button:hover,
+            div.stDownloadButton > button:hover {
+                transform: translateY(-1px);
+                filter: brightness(1.03);
+                box-shadow: 0 5px 14px rgba(15, 95, 87, 0.28);
+            }
+
+            div.stButton > button:focus,
+            div.stFormSubmitButton > button:focus,
+            div.stDownloadButton > button:focus {
+                outline: 2px solid #ffcb7f;
+                outline-offset: 2px;
+            }
+
+            [data-testid="stSidebar"] div.stButton > button,
+            [data-testid="stSidebar"] div.stFormSubmitButton > button,
+            [data-testid="stSidebar"] div.stDownloadButton > button {
+                background: linear-gradient(135deg, #ecf8f4 0%, #d8efe9 100%);
+                color: #123f3b !important;
+                border: 1px solid #90c6bb;
+                box-shadow: none;
+            }
+
+            [data-testid="stSidebar"] div.stButton > button:hover,
+            [data-testid="stSidebar"] div.stFormSubmitButton > button:hover,
+            [data-testid="stSidebar"] div.stDownloadButton > button:hover {
+                background: linear-gradient(135deg, #f5fffc 0%, #e3f8f3 100%);
             }
         </style>
         """,
