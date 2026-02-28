@@ -11,6 +11,20 @@ st.set_page_config(page_title="NotebookLM Clone", page_icon="📚", layout="wide
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 REQUEST_TIMEOUT_SECONDS = 30
 
+STATUS_LABELS = {
+    "ready": "Ready",
+    "failed": "Failed",
+    "processing": "Processing",
+    "pending": "Pending",
+}
+
+STATUS_ICONS = {
+    "ready": "✓",
+    "failed": "!",
+    "processing": "~",
+    "pending": "…",
+}
+
 
 def get_http_session() -> requests.Session:
     session = st.session_state.get("http_session")
@@ -141,8 +155,186 @@ def remove_query_param(name: str) -> None:
         st.experimental_set_query_params(**params)
 
 
-st.title("NotebookLM Clone")
-st.caption("Streamlit frontend shell")
+def inject_theme() -> None:
+    st.markdown(
+        """
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+            :root {
+                --ink: #162525;
+                --ink-muted: #4f6362;
+                --card: #fefdf9;
+                --card-border: #d2dad3;
+                --accent: #146f67;
+                --accent-soft: #d6efeb;
+                --warn-soft: #fff2dd;
+                --warn-border: #f0bd69;
+                --ok-soft: #def5ec;
+                --ok-border: #53a27f;
+                --error-soft: #ffe6e3;
+                --error-border: #d2675a;
+                --pending-soft: #eceeef;
+                --pending-border: #9aa7ad;
+            }
+
+            .stApp {
+                background:
+                    radial-gradient(circle at 15% -5%, #fff3de 0%, rgba(255, 243, 222, 0) 40%),
+                    radial-gradient(circle at 88% 8%, #d9efeb 0%, rgba(217, 239, 235, 0) 42%),
+                    linear-gradient(180deg, #f8faf8 0%, #f1f5f2 100%);
+                color: var(--ink);
+                font-family: "IBM Plex Sans", sans-serif;
+            }
+
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #173436 0%, #11292b 100%);
+            }
+
+            [data-testid="stSidebar"] * {
+                color: #e9f1ef !important;
+                font-family: "IBM Plex Sans", sans-serif;
+            }
+
+            h1, h2, h3, h4 {
+                font-family: "Space Grotesk", sans-serif;
+                letter-spacing: 0.02em;
+                color: var(--ink);
+            }
+
+            .app-hero {
+                background: linear-gradient(125deg, rgba(20, 111, 103, 0.13) 0%, rgba(255, 245, 228, 0.95) 56%, rgba(205, 231, 226, 0.9) 100%);
+                border: 1px solid #c9d9cf;
+                border-radius: 18px;
+                padding: 18px 22px;
+                margin-bottom: 14px;
+                box-shadow: 0 8px 24px rgba(17, 45, 42, 0.08);
+            }
+
+            .hero-kicker {
+                display: inline-block;
+                font-family: "Space Grotesk", sans-serif;
+                font-size: 0.75rem;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: #0f625b;
+                background: rgba(255, 255, 255, 0.7);
+                border: 1px solid rgba(15, 98, 91, 0.22);
+                border-radius: 999px;
+                padding: 3px 10px;
+                margin-bottom: 8px;
+            }
+
+            .hero-title {
+                margin: 0;
+                font-family: "Space Grotesk", sans-serif;
+                font-size: clamp(1.45rem, 2.4vw, 2rem);
+                line-height: 1.2;
+            }
+
+            .hero-sub {
+                margin: 6px 0 0 0;
+                color: var(--ink-muted);
+                font-size: 0.95rem;
+            }
+
+            .soft-card {
+                background: rgba(255, 255, 255, 0.82);
+                border: 1px solid var(--card-border);
+                border-radius: 14px;
+                padding: 12px 14px;
+            }
+
+            .metric-card {
+                background: var(--card);
+                border: 1px solid var(--card-border);
+                border-radius: 14px;
+                padding: 10px 12px;
+            }
+
+            .metric-label {
+                color: var(--ink-muted);
+                font-size: 0.78rem;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+            }
+
+            .metric-value {
+                font-family: "Space Grotesk", sans-serif;
+                font-size: 1.4rem;
+                color: var(--ink);
+                margin-top: 2px;
+            }
+
+            .status-pill {
+                display: inline-block;
+                border-radius: 999px;
+                padding: 4px 10px;
+                font-size: 0.78rem;
+                font-weight: 600;
+                border: 1px solid transparent;
+            }
+            .status-ready {
+                background: var(--ok-soft);
+                border-color: var(--ok-border);
+                color: #1c6b4d;
+            }
+            .status-failed {
+                background: var(--error-soft);
+                border-color: var(--error-border);
+                color: #8d3329;
+            }
+            .status-processing {
+                background: var(--warn-soft);
+                border-color: var(--warn-border);
+                color: #7d581a;
+            }
+            .status-pending {
+                background: var(--pending-soft);
+                border-color: var(--pending-border);
+                color: #485a63;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def status_key(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def render_status_pill(status: str | None, *, prefix: str = "") -> None:
+    key = status_key(status)
+    css = f"status-{key}" if key in STATUS_LABELS else "status-pending"
+    icon = STATUS_ICONS.get(key, "•")
+    label = STATUS_LABELS.get(key, str(status or "Unknown").title())
+    text = f"{prefix}{icon} {label}".strip()
+    st.markdown(f"<span class='status-pill {css}'>{text}</span>", unsafe_allow_html=True)
+
+
+def render_metric_card(label: str, value: str | int) -> None:
+    st.markdown(
+        (
+            "<div class='metric-card'>"
+            f"<div class='metric-label'>{label}</div>"
+            f"<div class='metric-value'>{value}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def build_artifact_option_label(artifact: dict[str, Any]) -> str:
+    art_id = artifact.get("id", "?")
+    art_type = str(artifact.get("type", "artifact")).title()
+    status = status_key(str(artifact.get("status", "")))
+    icon = STATUS_ICONS.get(status, "•")
+    label = STATUS_LABELS.get(status, str(artifact.get("status", "unknown")).title())
+    return f"#{art_id} · {art_type} · {icon} {label}"
+
+
+inject_theme()
 
 if "page" not in st.session_state:
     st.session_state["page"] = "Home"
@@ -166,7 +358,8 @@ if bridge_token and bridge_token != st.session_state["processed_bridge_token"]:
     st.rerun()
 
 with st.sidebar:
-    st.header("Navigation")
+    st.markdown("### Workspace")
+    st.caption("Connected client settings")
     st.text_input("Backend URL", value=BACKEND_URL, key="backend_url")
 
     auth_ok, auth_result, _ = api_get("/auth/status")
@@ -181,7 +374,7 @@ with st.sidebar:
         if login_ok:
             st.rerun()
 
-    st.subheader("Auth")
+    st.subheader("Authentication")
     st.caption(f"Mode: {auth_mode}")
     bridge_error = st.session_state.get("bridge_error")
     if bridge_error:
@@ -240,6 +433,25 @@ with st.sidebar:
             st.session_state.pop("selected_thread_id", None)
             st.rerun()
 
+hero_mode = auth_mode if isinstance(auth_mode, str) else "unknown"
+hero_identity = "Not signed in"
+if authenticated and isinstance(auth_user, dict):
+    hero_identity = str(auth_user.get("display_name") or auth_user.get("email") or "Signed in")
+st.markdown(
+    (
+        "<div class='app-hero'>"
+        "<span class='hero-kicker'>Notebook Workspace</span>"
+        "<h1 class='hero-title'>NotebookLM Clone</h1>"
+        "<p class='hero-sub'>"
+        "Ingest sources, chat with citations, and generate reports, quizzes, and podcasts."
+        f" &nbsp;|&nbsp; Auth mode: <strong>{hero_mode}</strong>"
+        f" &nbsp;|&nbsp; User: <strong>{hero_identity}</strong>"
+        "</p>"
+        "</div>"
+    ),
+    unsafe_allow_html=True,
+)
+
 if not auth_ok:
     st.error(f"Backend auth check failed: {auth_result}")
     st.stop()
@@ -250,9 +462,20 @@ if not authenticated:
 
 if page == "Home":
     st.subheader("Home")
-    st.write("Frontend is connected to your FastAPI backend.")
+    st.markdown(
+        "<div class='soft-card'>Use this page to verify backend connectivity and auth status before working in notebooks.</div>",
+        unsafe_allow_html=True,
+    )
 
     ok, result, _ = api_get("/health")
+    metric_col_1, metric_col_2, metric_col_3 = st.columns(3)
+    with metric_col_1:
+        render_metric_card("Auth Mode", hero_mode)
+    with metric_col_2:
+        render_metric_card("Session", "Signed in" if authenticated else "Signed out")
+    with metric_col_3:
+        render_metric_card("Backend", "Healthy" if ok else "Unavailable")
+
     if ok:
         st.success("Backend health check passed.")
         st.json(result)
@@ -262,10 +485,21 @@ if page == "Home":
 
 elif page == "Notebooks":
     st.subheader("Notebooks")
+    st.markdown(
+        "<div class='soft-card'>Create or open a notebook, ingest sources, then use chat and artifact tools from one workspace.</div>",
+        unsafe_allow_html=True,
+    )
 
-    with st.form("create_notebook_form"):
-        notebook_title = st.text_input("Notebook title", placeholder="e.g., AI Research Notes")
-        submitted = st.form_submit_button("Create notebook")
+    create_col, refresh_col = st.columns([3, 1])
+    with create_col:
+        with st.form("create_notebook_form"):
+            notebook_title = st.text_input("Notebook title", placeholder="e.g., AI Research Notes")
+            submitted = st.form_submit_button("Create notebook")
+    with refresh_col:
+        st.write("")
+        st.write("")
+        if st.button("Refresh notebooks", use_container_width=True):
+            st.rerun()
 
     if submitted:
         if notebook_title.strip():
@@ -282,15 +516,23 @@ elif page == "Notebooks":
         else:
             st.error("Notebook title is required.")
 
-    if st.button("Refresh notebooks"):
-        st.rerun()
-
     ok, result = fetch_notebooks()
     if ok:
         notebooks = result if isinstance(result, list) else []
+        selected_notebook_id = st.session_state.get("selected_notebook_id")
+        selected_notebook_title = st.session_state.get("selected_notebook_title")
+
+        metrics_left, metrics_mid, metrics_right = st.columns(3)
+        with metrics_left:
+            render_metric_card("Notebook Count", len(notebooks))
+        with metrics_mid:
+            render_metric_card("Selected Notebook", selected_notebook_id or "None")
+        with metrics_right:
+            render_metric_card("Workspace State", "Ready" if notebooks else "Empty")
+
         if notebooks:
             st.write("Your notebooks")
-            st.dataframe(notebooks, use_container_width=True)
+            st.dataframe(notebooks, use_container_width=True, hide_index=True)
 
             notebook_options = {
                 f"{n['id']} - {n['title']}": n
@@ -298,7 +540,12 @@ elif page == "Notebooks":
                 if isinstance(n, dict) and "id" in n and "title" in n
             }
             labels = list(notebook_options.keys())
-            selected_label = st.selectbox("Select notebook to open", options=labels)
+            default_index = 0
+            for idx, label in enumerate(labels):
+                if notebook_options[label]["id"] == selected_notebook_id:
+                    default_index = idx
+                    break
+            selected_label = st.selectbox("Select notebook to open", options=labels, index=default_index)
             selected = notebook_options[selected_label]
             if st.button("Open notebook"):
                 st.session_state["selected_notebook_id"] = selected["id"]
@@ -311,6 +558,7 @@ elif page == "Notebooks":
             if selected_notebook_id:
                 st.divider()
                 st.subheader(f"Notebook: {selected_notebook_title}")
+                render_status_pill("ready", prefix="Notebook ")
 
                 manage_left, manage_right = st.columns(2)
                 with manage_left:
@@ -359,9 +607,15 @@ elif page == "Notebooks":
                             st.error("Failed to delete notebook.")
                             st.code(str(delete_result))
 
-                source_tab, chat_tab, artifacts_tab = st.tabs(["Sources", "Chat", "Artifacts"])
+                source_tab, chat_tab, artifacts_tab = st.tabs(
+                    ["Source Library", "Chat Workspace", "Artifact Studio"]
+                )
 
                 with source_tab:
+                    st.markdown(
+                        "<div class='soft-card'>Upload files or add links. Ingested sources are scoped to this notebook.</div>",
+                        unsafe_allow_html=True,
+                    )
                     ok, notebook_result = fetch_notebooks()
                     if not ok:
                         st.error("Failed to load notebooks.")
@@ -462,8 +716,23 @@ elif page == "Notebooks":
                             if ok:
                                 sources = source_result if isinstance(source_result, list) else []
                                 if sources:
+                                    ready_sources = sum(
+                                        1 for src in sources if status_key(str(src.get("status", ""))) == "ready"
+                                    )
+                                    processing_sources = sum(
+                                        1
+                                        for src in sources
+                                        if status_key(str(src.get("status", ""))) in {"processing", "pending"}
+                                    )
+                                    source_metrics_1, source_metrics_2, source_metrics_3 = st.columns(3)
+                                    with source_metrics_1:
+                                        render_metric_card("Source Count", len(sources))
+                                    with source_metrics_2:
+                                        render_metric_card("Ready Sources", ready_sources)
+                                    with source_metrics_3:
+                                        render_metric_card("In Flight", processing_sources)
                                     st.write("Sources")
-                                    st.dataframe(sources, use_container_width=True)
+                                    st.dataframe(sources, use_container_width=True, hide_index=True)
                                 else:
                                     st.info("No sources yet for this notebook.")
                             else:
@@ -471,11 +740,16 @@ elif page == "Notebooks":
                                 st.code(str(source_result))
 
                 with chat_tab:
+                    st.markdown(
+                        "<div class='soft-card'>Ask questions grounded in your selected notebook sources. Citations are shown per assistant response.</div>",
+                        unsafe_allow_html=True,
+                    )
                     st.write("Chat threads")
                     ok, thread_result, _ = api_get(
                         f"/notebooks/{selected_notebook_id}/threads",
                     )
                     threads = thread_result if (ok and isinstance(thread_result, list)) else []
+                    render_metric_card("Thread Count", len(threads))
 
                     with st.form("create_thread_form"):
                         thread_title = st.text_input("Thread title (optional)")
@@ -527,13 +801,12 @@ elif page == "Notebooks":
                                 role = msg.get("role", "unknown")
                                 content = msg.get("content", "")
                                 citations = msg.get("citations", [])
-                                if role == "assistant":
-                                    st.markdown(f"**Assistant:** {content}")
-                                    if isinstance(citations, list) and citations:
+                                message_type = "assistant" if role == "assistant" else "user"
+                                with st.chat_message(message_type):
+                                    st.markdown(str(content))
+                                    if role == "assistant" and isinstance(citations, list) and citations:
                                         with st.expander("Citations", expanded=False):
-                                            st.dataframe(citations, use_container_width=True)
-                                else:
-                                    st.markdown(f"**You:** {content}")
+                                            st.dataframe(citations, use_container_width=True, hide_index=True)
                         else:
                             st.error("Failed to fetch messages.")
                             st.code(str(message_result))
@@ -568,7 +841,10 @@ elif page == "Notebooks":
                         st.info("Create a thread to start chatting.")
 
                 with artifacts_tab:
-                    st.write("Artifact generation")
+                    st.markdown(
+                        "<div class='soft-card'>Generate structured outputs from notebook context and track progress here.</div>",
+                        unsafe_allow_html=True,
+                    )
 
                     report_col, quiz_col, podcast_col = st.columns(3)
 
@@ -700,9 +976,30 @@ elif page == "Notebooks":
                                 value=bool(st.session_state.get(auto_refresh_key, True)),
                                 key=auto_refresh_key,
                             )
-                            st.dataframe(artifacts, use_container_width=True)
+                            ready_count = sum(
+                                1 for artifact in artifacts if status_key(str(artifact.get("status", ""))) == "ready"
+                            )
+                            failed_count = sum(
+                                1 for artifact in artifacts if status_key(str(artifact.get("status", ""))) == "failed"
+                            )
+                            in_flight = sum(
+                                1
+                                for artifact in artifacts
+                                if status_key(str(artifact.get("status", ""))) in {"pending", "processing"}
+                            )
+                            artifact_metric_1, artifact_metric_2, artifact_metric_3, artifact_metric_4 = st.columns(4)
+                            with artifact_metric_1:
+                                render_metric_card("Artifacts", len(artifacts))
+                            with artifact_metric_2:
+                                render_metric_card("Ready", ready_count)
+                            with artifact_metric_3:
+                                render_metric_card("Processing", in_flight)
+                            with artifact_metric_4:
+                                render_metric_card("Failed", failed_count)
+
+                            st.dataframe(artifacts, use_container_width=True, hide_index=True)
                             artifact_options = {
-                                f"{a['id']} - {a.get('type', 'unknown')} - {a.get('status', '')}": a
+                                build_artifact_option_label(a): a
                                 for a in artifacts
                                 if isinstance(a, dict) and "id" in a
                             }
@@ -716,6 +1013,16 @@ elif page == "Notebooks":
                             artifact_type = str(selected_artifact.get("type", ""))
                             artifact_status = str(selected_artifact.get("status", ""))
                             artifact_content = selected_artifact.get("content")
+                            artifact_error = selected_artifact.get("error_message")
+
+                            status_col, type_col = st.columns([1, 4])
+                            with status_col:
+                                render_status_pill(artifact_status)
+                            with type_col:
+                                st.caption(f"Artifact type: {artifact_type}")
+
+                            if artifact_error:
+                                st.error(str(artifact_error))
 
                             if artifact_type == "report" and artifact_content:
                                 st.markdown("### Report Preview")
@@ -764,11 +1071,6 @@ elif page == "Notebooks":
                             else:
                                 st.info("Select an artifact to preview.")
 
-                            in_flight = sum(
-                                1
-                                for a in artifacts
-                                if str(a.get("status", "")).lower() in {"pending", "processing"}
-                            )
                             if auto_refresh and in_flight > 0:
                                 st.caption(
                                     f"{in_flight} artifact(s) still processing. "
