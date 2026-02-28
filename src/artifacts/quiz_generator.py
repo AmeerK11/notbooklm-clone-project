@@ -5,34 +5,84 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import requests
 
 from src.ingestion.vectorstore import ChromaAdapter
 
 load_dotenv()
 
+SUPPORTED_QUIZ_LLM_PROVIDERS = {"openai", "groq", "ollama"}
+DEFAULT_QUIZ_MODELS = {
+    "openai": "gpt-4o-mini",
+    "groq": "llama-3.1-8b-instant",
+    "ollama": "qwen2.5:3b",
+}
+QUIZ_SYSTEM_PROMPT = (
+    "You are an expert quiz generator. Create clear, educational, and well-structured "
+    "multiple-choice questions. Return valid JSON only with a top-level 'questions' array."
+)
+
 
 class QuizGenerator:
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        llm_provider: Optional[str] = None,
+    ):
         """
         Initialize quiz generator.
 
         Args:
             api_key: OpenAI API key (defaults to OPENAI_API_KEY from .env)
             model: LLM model to use (defaults to LLM_MODEL from .env)
+            llm_provider: Quiz LLM provider (openai, groq, ollama)
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
-        self.client = OpenAI(api_key=self.api_key)
+        self.llm_provider = (llm_provider or os.getenv("QUIZ_LLM_PROVIDER", "openai")).strip().lower()
+        if self.llm_provider not in SUPPORTED_QUIZ_LLM_PROVIDERS:
+            raise ValueError(
+                f"Unsupported QUIZ_LLM_PROVIDER='{self.llm_provider}'. "
+                f"Choose from: {sorted(SUPPORTED_QUIZ_LLM_PROVIDERS)}"
+            )
+        self.model = self._resolve_model_name(model)
+        self._openai_client: OpenAI | None = None
+        self._groq_client = None
+        self._ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+        if self.llm_provider == "openai":
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+            self._openai_client = OpenAI(api_key=self.api_key)
+        elif self.llm_provider == "groq":
+            from groq import Groq
+
+            groq_api_key = os.getenv("GROQ_API_KEY")
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY is required when QUIZ_LLM_PROVIDER=groq")
+            self._groq_client = Groq(api_key=groq_api_key)
+        else:
+            self.api_key = None
 
         # Default settings from .env
         self.default_num_questions = int(os.getenv("DEFAULT_QUIZ_QUESTIONS", "5"))
         self.default_difficulty = os.getenv("DEFAULT_QUIZ_DIFFICULTY", "medium")
+
+    def _resolve_model_name(self, explicit_model: Optional[str]) -> str:
+        if explicit_model and explicit_model.strip():
+            return explicit_model.strip()
+        configured = os.getenv("QUIZ_LLM_MODEL", "").strip()
+        if configured:
+            return configured
+        legacy = os.getenv("LLM_MODEL", "").strip()
+        if legacy:
+            return legacy
+        return DEFAULT_QUIZ_MODELS.get(self.llm_provider, "gpt-4o-mini")
 
     def generate_quiz(
         self,
@@ -73,16 +123,32 @@ class QuizGenerator:
         # 2. Generate quiz using LLM
         print("🤖 Generating questions with LLM...")
         quiz_data = self._generate_with_llm(context, num_questions, difficulty)
+        questions = quiz_data.get("questions", []) if isinstance(quiz_data, dict) else []
+        if not questions:
+            return {
+                "error": "Failed to generate quiz questions from notebook context.",
+                "questions": [],
+                "metadata": {
+                    "notebook_id": notebook_id,
+                    "num_questions": num_questions,
+                    "difficulty": difficulty,
+                    "topic_focus": topic_focus,
+                    "llm_provider": self.llm_provider,
+                    "llm_model": self.model,
+                    "generated_at": datetime.utcnow().isoformat(),
+                },
+            }
 
         # 3. Format and return
         return {
-            "questions": quiz_data.get("questions", []),
+            "questions": questions,
             "metadata": {
                 "notebook_id": notebook_id,
                 "num_questions": num_questions,
                 "difficulty": difficulty,
                 "topic_focus": topic_focus,
-                "model": self.model,
+                "llm_provider": self.llm_provider,
+                "llm_model": self.model,
                 "generated_at": datetime.utcnow().isoformat(),
             },
         }
@@ -147,25 +213,135 @@ class QuizGenerator:
         prompt = self._build_quiz_prompt(context, num_questions, difficulty)
 
         try:
-            response = self.client.chat.completions.create(
+            raw_response = self._generate_quiz_json(prompt)
+            payload = self._extract_json_object(raw_response)
+            questions = payload.get("questions") if isinstance(payload, dict) else None
+            if not isinstance(questions, list):
+                return {"questions": []}
+            return {
+                "questions": self._normalize_questions(
+                    questions=questions,
+                    expected_count=num_questions,
+                    difficulty=difficulty,
+                )
+            }
+
+        except Exception as e:
+            print(f"❌ Error generating quiz: {e}")
+            return {"questions": []}
+
+    def _generate_quiz_json(self, prompt: str) -> str:
+        if self.llm_provider == "openai":
+            assert self._openai_client is not None
+            response = self._openai_client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert quiz generator. Create clear, educational, and well-structured quiz questions.",
-                    },
+                    {"role": "system", "content": QUIZ_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
                 response_format={"type": "json_object"},
             )
+            return str(response.choices[0].message.content or "")
 
-            quiz_data = json.loads(response.choices[0].message.content)
-            return quiz_data
+        if self.llm_provider == "groq":
+            assert self._groq_client is not None
+            response = self._groq_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": QUIZ_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+            )
+            return str(response.choices[0].message.content or "")
 
-        except Exception as e:
-            print(f"❌ Error generating quiz: {e}")
-            return {"questions": []}
+        payload = {
+            "model": self.model,
+            "system": QUIZ_SYSTEM_PROMPT,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.7},
+        }
+        response = requests.post(
+            f"{self._ollama_base_url}/api/generate",
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        body = response.json()
+        return str(body.get("response", ""))
+
+    def _extract_json_object(self, raw_response: str) -> Dict[str, Any]:
+        content = str(raw_response or "").strip()
+        if not content:
+            return {}
+
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    def _normalize_questions(
+        self,
+        questions: List[Any],
+        expected_count: int,
+        difficulty: str,
+    ) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for item in questions:
+            if not isinstance(item, dict):
+                continue
+            prompt = str(item.get("question", "")).strip()
+            if not prompt:
+                continue
+
+            options_raw = item.get("options")
+            options: List[str] = []
+            if isinstance(options_raw, list):
+                for opt in options_raw:
+                    text = str(opt).strip()
+                    if text:
+                        options.append(text)
+
+            answer = self._normalize_answer_letter(str(item.get("correct_answer", "")).strip())
+            explanation = str(item.get("explanation", "")).strip()
+            topic = str(item.get("topic", "")).strip()
+
+            normalized.append(
+                {
+                    "id": len(normalized) + 1,
+                    "question": prompt,
+                    "options": options,
+                    "correct_answer": answer or "N/A",
+                    "explanation": explanation,
+                    "difficulty": difficulty,
+                    "topic": topic,
+                }
+            )
+            if len(normalized) >= expected_count:
+                break
+        return normalized
+
+    def _normalize_answer_letter(self, value: str) -> str:
+        match = re.search(r"[A-D]", value.upper())
+        return match.group(0) if match else ""
 
     def _build_quiz_prompt(self, context: str, num_questions: int, difficulty: str) -> str:
         """Build the quiz generation prompt."""
