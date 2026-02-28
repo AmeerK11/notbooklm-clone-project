@@ -71,6 +71,7 @@ class ElevenLabsTTS(TTSAdapter):
         self.client = ElevenLabs(api_key=self.api_key)
         self.default_voice = os.getenv("TTS_ELEVENLABS_VOICE_1", "Rachel")
         self.default_model = os.getenv("TTS_ELEVENLABS_MODEL", "eleven_multilingual_v2")
+        self.output_format = os.getenv("TTS_ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128")
         self._voice_aliases = self._load_voice_aliases()
 
     def _load_voice_aliases(self) -> dict[str, str]:
@@ -98,6 +99,83 @@ class ElevenLabsTTS(TTSAdapter):
         if not candidate:
             candidate = self.default_voice
         return self._voice_aliases.get(candidate.lower(), candidate)
+
+    def _try_call_variants(self, method: Any, variants: list[dict[str, Any]]) -> Any:
+        """
+        Some ElevenLabs SDK versions use different parameter names.
+        Try a small set of known-compatible signatures.
+        """
+        last_type_error: TypeError | None = None
+        for kwargs in variants:
+            try:
+                return method(**kwargs)
+            except TypeError as exc:
+                last_type_error = exc
+                continue
+        if last_type_error:
+            raise last_type_error
+        raise RuntimeError("Unable to call ElevenLabs SDK method with known signatures.")
+
+    def _request_audio(self, text: str, voice_candidate: str, model_candidate: str) -> Any:
+        """
+        Support both legacy and modern ElevenLabs Python SDK APIs:
+        - legacy: client.generate(...)
+        - modern: client.text_to_speech.convert(...)/convert_as_stream(...)
+        """
+        if hasattr(self.client, "generate"):
+            return self._try_call_variants(
+                self.client.generate,
+                [
+                    {"text": text, "voice": voice_candidate, "model": model_candidate},
+                    {"text": text, "voice": voice_candidate, "model_id": model_candidate},
+                    {"text": text, "voice_id": voice_candidate, "model_id": model_candidate},
+                ],
+            )
+
+        tts_api = getattr(self.client, "text_to_speech", None)
+        if tts_api is not None:
+            if hasattr(tts_api, "convert_as_stream"):
+                return self._try_call_variants(
+                    tts_api.convert_as_stream,
+                    [
+                        {
+                            "text": text,
+                            "voice_id": voice_candidate,
+                            "model_id": model_candidate,
+                            "output_format": self.output_format,
+                        },
+                        {
+                            "text": text,
+                            "voice_id": voice_candidate,
+                            "model_id": model_candidate,
+                        },
+                        {"text": text, "voice": voice_candidate, "model": model_candidate},
+                    ],
+                )
+
+            if hasattr(tts_api, "convert"):
+                return self._try_call_variants(
+                    tts_api.convert,
+                    [
+                        {
+                            "text": text,
+                            "voice_id": voice_candidate,
+                            "model_id": model_candidate,
+                            "output_format": self.output_format,
+                        },
+                        {
+                            "text": text,
+                            "voice_id": voice_candidate,
+                            "model_id": model_candidate,
+                        },
+                        {"text": text, "voice": voice_candidate, "model": model_candidate},
+                    ],
+                )
+
+        raise AttributeError(
+            "No compatible ElevenLabs synthesis method found on client "
+            "(expected generate() or text_to_speech.convert())."
+        )
 
     def _write_audio_output(self, audio: Any, output_path: str) -> None:
         """
@@ -154,11 +232,7 @@ class ElevenLabsTTS(TTSAdapter):
         for voice_candidate in voice_candidates:
             for model_candidate in model_candidates:
                 try:
-                    audio = self.client.generate(
-                        text=text,
-                        voice=voice_candidate,
-                        model=model_candidate,
-                    )
+                    audio = self._request_audio(text, voice_candidate, model_candidate)
                     self._write_audio_output(audio, output_path)
                     return output_path
                 except Exception as exc:
