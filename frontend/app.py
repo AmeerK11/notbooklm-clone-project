@@ -208,6 +208,7 @@ def inject_theme() -> None:
             }
 
             /* ── Dark-mode tokens ── */
+            /* Triggered by OS preference OR by JS-injected .dark-mode class */
             @media (prefers-color-scheme: dark) {
                 :root {
                     --ink: #e4eceb;
@@ -253,6 +254,51 @@ def inject_theme() -> None:
                     --status-processing-color: #f0c56d;
                     --status-pending-color: #9bb0b5;
                 }
+            }
+            /* Same overrides for JS-detected Streamlit dark theme */
+            html.dark-mode {
+                    --ink: #e4eceb;
+                    --ink-muted: #9bb0ae;
+                    --card: #1e2d2d;
+                    --card-border: #3a4e4b;
+                    --accent: #3dd4c6;
+                    --accent-soft: #1a3d39;
+                    --warn-soft: #3d3223;
+                    --warn-border: #b89040;
+                    --ok-soft: #1a3d2e;
+                    --ok-border: #3d9a6a;
+                    --error-soft: #3d2220;
+                    --error-border: #c25a4e;
+                    --pending-soft: #2a3235;
+                    --pending-border: #6b7b82;
+                    --app-bg: linear-gradient(180deg, #141e1e 0%, #0f1817 100%);
+                    --app-bg-overlay-1: radial-gradient(circle at 15% -5%, rgba(50, 40, 20, 0.4) 0%, rgba(50, 40, 20, 0) 42%);
+                    --app-bg-overlay-2: radial-gradient(circle at 88% 8%, rgba(20, 60, 55, 0.3) 0%, rgba(20, 60, 55, 0) 44%);
+                    --hero-bg: linear-gradient(125deg, rgba(20, 111, 103, 0.2) 0%, rgba(30, 45, 45, 0.95) 56%, rgba(25, 60, 55, 0.9) 100%);
+                    --hero-border: #2a3e3c;
+                    --hero-kicker-bg: rgba(30, 45, 45, 0.7);
+                    --hero-kicker-color: #5ce0d3;
+                    --hero-kicker-border: rgba(60, 180, 165, 0.3);
+                    --soft-card-bg: rgba(30, 45, 45, 0.7);
+                    --sidebar-bg: linear-gradient(180deg, #0e1f20 0%, #0a1617 100%);
+                    --sidebar-text: #c8dad6;
+                    --sidebar-input-bg: rgba(200, 218, 214, 0.08);
+                    --sidebar-input-border: rgba(120, 170, 160, 0.25);
+                    --sidebar-btn-bg: linear-gradient(135deg, #1a3332 0%, #162c2b 100%);
+                    --sidebar-btn-color: #b0d8cf;
+                    --sidebar-btn-border: #3a6e64;
+                    --sidebar-btn-hover-bg: linear-gradient(135deg, #1f3d3b 0%, #1a3634 100%);
+                    --btn-bg: linear-gradient(135deg, #1a8a7e 0%, #167a70 100%);
+                    --btn-color: #e8fff9;
+                    --btn-border: #1a8a7e;
+                    --btn-shadow: rgba(26, 138, 126, 0.3);
+                    --input-color: #e0ece9;
+                    --input-placeholder: #7a9490;
+                    --select-dropdown-color: #e0ece9;
+                    --status-ready-color: #6ee6b7;
+                    --status-failed-color: #f49b8f;
+                    --status-processing-color: #f0c56d;
+                    --status-pending-color: #9bb0b5;
             }
 
             .stApp {
@@ -523,6 +569,31 @@ def inject_theme() -> None:
                 overflow: hidden;
             }
         </style>
+        <script>
+        // Detect Streamlit's internal dark theme by checking computed background color.
+        // Streamlit doesn't always use prefers-color-scheme, so we poll the actual bg.
+        (function() {
+            function checkDarkMode() {
+                var app = document.querySelector('[data-testid="stAppViewContainer"]')
+                         || document.querySelector('.stApp')
+                         || document.body;
+                var bg = window.getComputedStyle(app).backgroundColor;
+                var match = bg.match(/\d+/g);
+                if (match && match.length >= 3) {
+                    var r = parseInt(match[0]), g = parseInt(match[1]), b = parseInt(match[2]);
+                    var luminance = (r * 299 + g * 587 + b * 114) / 1000;
+                    if (luminance < 128) {
+                        document.documentElement.classList.add('dark-mode');
+                    } else {
+                        document.documentElement.classList.remove('dark-mode');
+                    }
+                }
+            }
+            // Run immediately and then poll every 2 seconds (handles theme switches)
+            checkDarkMode();
+            setInterval(checkDarkMode, 2000);
+        })();
+        </script>
         """,
         unsafe_allow_html=True,
     )
