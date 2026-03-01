@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -166,7 +166,7 @@ class PodcastGenerator:
                     "num_segments": len(script),
                     "topic_focus": topic_focus,
                     "tts_errors": self._last_tts_errors[:20],
-                    "generated_at": datetime.utcnow().isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
 
@@ -190,7 +190,7 @@ class PodcastGenerator:
                     "llm_model": self.model,
                     "num_segments": len(script),
                     "topic_focus": topic_focus,
-                    "generated_at": datetime.utcnow().isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
 
@@ -206,7 +206,7 @@ class PodcastGenerator:
                 "llm_model": self.model,
                 "num_segments": len(script),
                 "topic_focus": topic_focus,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
             },
         }
 
@@ -455,7 +455,8 @@ IMPORTANT:
     ) -> List[str]:
         """Synthesize each script segment to audio."""
 
-        audio_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/podcasts")
+        storage_base = os.getenv("STORAGE_BASE_DIR", "data")
+        audio_dir = Path(storage_base) / "users" / user_id / "notebooks" / notebook_id / "artifacts" / "podcasts"
         audio_dir.mkdir(parents=True, exist_ok=True)
 
         voice_maps: Dict[str, Dict[str, str]] = {
@@ -532,8 +533,9 @@ IMPORTANT:
                 print(f"  ⚠️  Error processing segment {i}: {e}")
                 continue
 
-        output_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/podcasts")
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        storage_base = os.getenv("STORAGE_BASE_DIR", "data")
+        output_dir = Path(storage_base) / "users" / user_id / "notebooks" / notebook_id / "artifacts" / "podcasts"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         final_path = str(output_dir / f"podcast_{timestamp}.mp3")
 
         combined.export(final_path, format="mp3")
@@ -550,12 +552,11 @@ IMPORTANT:
         notebook_id: str,
     ) -> str:
         """Save podcast transcript Markdown to file."""
-        transcript_dir = Path(
-            f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/podcasts"
-        )
+        storage_base = os.getenv("STORAGE_BASE_DIR", "data")
+        transcript_dir = Path(storage_base) / "users" / user_id / "notebooks" / notebook_id / "artifacts" / "podcasts"
         transcript_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"transcript_{timestamp}.md"
         filepath = transcript_dir / filename
 

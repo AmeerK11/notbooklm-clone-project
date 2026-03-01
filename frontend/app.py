@@ -161,6 +161,7 @@ def inject_theme() -> None:
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
+            /* ── Light-mode tokens (default) ── */
             :root {
                 --ink: #162525;
                 --ink-muted: #4f6362;
@@ -176,13 +177,89 @@ def inject_theme() -> None:
                 --error-border: #d2675a;
                 --pending-soft: #eceeef;
                 --pending-border: #9aa7ad;
+                --app-bg: linear-gradient(180deg, #f8faf8 0%, #f1f5f2 100%);
+                --app-bg-overlay-1: radial-gradient(circle at 15% -5%, #fff5e6 0%, rgba(255, 245, 230, 0) 42%);
+                --app-bg-overlay-2: radial-gradient(circle at 88% 8%, #dff2ee 0%, rgba(223, 242, 238, 0) 44%);
+                --hero-bg: linear-gradient(125deg, rgba(20, 111, 103, 0.13) 0%, rgba(255, 245, 228, 0.95) 56%, rgba(205, 231, 226, 0.9) 100%);
+                --hero-border: #c9d9cf;
+                --hero-kicker-bg: rgba(255, 255, 255, 0.7);
+                --hero-kicker-color: #0f625b;
+                --hero-kicker-border: rgba(15, 98, 91, 0.22);
+                --soft-card-bg: rgba(255, 255, 255, 0.82);
+                --sidebar-bg: linear-gradient(180deg, #173436 0%, #11292b 100%);
+                --sidebar-text: #e9f1ef;
+                --sidebar-input-bg: rgba(233, 241, 239, 0.1);
+                --sidebar-input-border: rgba(178, 209, 202, 0.35);
+                --sidebar-btn-bg: linear-gradient(135deg, #ecf8f4 0%, #d8efe9 100%);
+                --sidebar-btn-color: #123f3b;
+                --sidebar-btn-border: #90c6bb;
+                --sidebar-btn-hover-bg: linear-gradient(135deg, #f5fffc 0%, #e3f8f3 100%);
+                --btn-bg: linear-gradient(135deg, #167269 0%, #0f5f57 100%);
+                --btn-color: #f4fffd;
+                --btn-border: #0f5f57;
+                --btn-shadow: rgba(15, 95, 87, 0.22);
+                --input-color: #162525;
+                --input-placeholder: #5a6a69;
+                --select-dropdown-color: #0f2a27;
+                --status-ready-color: #1c6b4d;
+                --status-failed-color: #8d3329;
+                --status-processing-color: #7d581a;
+                --status-pending-color: #485a63;
+            }
+
+            /* ── Dark-mode tokens ── */
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --ink: #e4eceb;
+                    --ink-muted: #9bb0ae;
+                    --card: #1e2d2d;
+                    --card-border: #3a4e4b;
+                    --accent: #3dd4c6;
+                    --accent-soft: #1a3d39;
+                    --warn-soft: #3d3223;
+                    --warn-border: #b89040;
+                    --ok-soft: #1a3d2e;
+                    --ok-border: #3d9a6a;
+                    --error-soft: #3d2220;
+                    --error-border: #c25a4e;
+                    --pending-soft: #2a3235;
+                    --pending-border: #6b7b82;
+                    --app-bg: linear-gradient(180deg, #141e1e 0%, #0f1817 100%);
+                    --app-bg-overlay-1: radial-gradient(circle at 15% -5%, rgba(50, 40, 20, 0.4) 0%, rgba(50, 40, 20, 0) 42%);
+                    --app-bg-overlay-2: radial-gradient(circle at 88% 8%, rgba(20, 60, 55, 0.3) 0%, rgba(20, 60, 55, 0) 44%);
+                    --hero-bg: linear-gradient(125deg, rgba(20, 111, 103, 0.2) 0%, rgba(30, 45, 45, 0.95) 56%, rgba(25, 60, 55, 0.9) 100%);
+                    --hero-border: #2a3e3c;
+                    --hero-kicker-bg: rgba(30, 45, 45, 0.7);
+                    --hero-kicker-color: #5ce0d3;
+                    --hero-kicker-border: rgba(60, 180, 165, 0.3);
+                    --soft-card-bg: rgba(30, 45, 45, 0.7);
+                    --sidebar-bg: linear-gradient(180deg, #0e1f20 0%, #0a1617 100%);
+                    --sidebar-text: #c8dad6;
+                    --sidebar-input-bg: rgba(200, 218, 214, 0.08);
+                    --sidebar-input-border: rgba(120, 170, 160, 0.25);
+                    --sidebar-btn-bg: linear-gradient(135deg, #1a3332 0%, #162c2b 100%);
+                    --sidebar-btn-color: #b0d8cf;
+                    --sidebar-btn-border: #3a6e64;
+                    --sidebar-btn-hover-bg: linear-gradient(135deg, #1f3d3b 0%, #1a3634 100%);
+                    --btn-bg: linear-gradient(135deg, #1a8a7e 0%, #167a70 100%);
+                    --btn-color: #e8fff9;
+                    --btn-border: #1a8a7e;
+                    --btn-shadow: rgba(26, 138, 126, 0.3);
+                    --input-color: #e0ece9;
+                    --input-placeholder: #7a9490;
+                    --select-dropdown-color: #e0ece9;
+                    --status-ready-color: #6ee6b7;
+                    --status-failed-color: #f49b8f;
+                    --status-processing-color: #f0c56d;
+                    --status-pending-color: #9bb0b5;
+                }
             }
 
             .stApp {
                 background:
-                    radial-gradient(circle at 15% -5%, #fff5e6 0%, rgba(255, 245, 230, 0) 42%),
-                    radial-gradient(circle at 88% 8%, #dff2ee 0%, rgba(223, 242, 238, 0) 44%),
-                    linear-gradient(180deg, #f8faf8 0%, #f1f5f2 100%);
+                    var(--app-bg-overlay-1),
+                    var(--app-bg-overlay-2),
+                    var(--app-bg);
                 color: var(--ink);
                 font-family: "IBM Plex Sans", sans-serif;
             }
@@ -195,10 +272,11 @@ def inject_theme() -> None:
 
             p, li, label, [data-testid="stMarkdownContainer"] p {
                 line-height: 1.5;
+                color: var(--ink);
             }
 
             [data-testid="stSidebar"] {
-                background: linear-gradient(180deg, #173436 0%, #11292b 100%);
+                background: var(--sidebar-bg);
             }
 
             [data-testid="stSidebar"] h1,
@@ -209,7 +287,7 @@ def inject_theme() -> None:
             [data-testid="stSidebar"] p,
             [data-testid="stSidebar"] small,
             [data-testid="stSidebar"] span {
-                color: #e9f1ef;
+                color: var(--sidebar-text);
                 font-family: "IBM Plex Sans", sans-serif;
             }
 
@@ -217,13 +295,13 @@ def inject_theme() -> None:
             [data-testid="stSidebar"] .stTextArea textarea,
             [data-testid="stSidebar"] div[data-baseweb="select"] > div,
             [data-testid="stSidebar"] .stNumberInput input {
-                background: rgba(233, 241, 239, 0.1);
-                color: #f3f8f7;
-                border: 1px solid rgba(178, 209, 202, 0.35);
+                background: var(--sidebar-input-bg);
+                color: var(--sidebar-text);
+                border: 1px solid var(--sidebar-input-border);
             }
 
             [data-testid="stSidebar"] div[data-baseweb="select"] * {
-                color: #0f2a27;
+                color: var(--select-dropdown-color);
             }
 
             h1, h2, h3, h4 {
@@ -233,8 +311,8 @@ def inject_theme() -> None:
             }
 
             .app-hero {
-                background: linear-gradient(125deg, rgba(20, 111, 103, 0.13) 0%, rgba(255, 245, 228, 0.95) 56%, rgba(205, 231, 226, 0.9) 100%);
-                border: 1px solid #c9d9cf;
+                background: var(--hero-bg);
+                border: 1px solid var(--hero-border);
                 border-radius: 18px;
                 padding: 18px 22px;
                 margin-bottom: 14px;
@@ -247,9 +325,9 @@ def inject_theme() -> None:
                 font-size: 0.75rem;
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
-                color: #0f625b;
-                background: rgba(255, 255, 255, 0.7);
-                border: 1px solid rgba(15, 98, 91, 0.22);
+                color: var(--hero-kicker-color);
+                background: var(--hero-kicker-bg);
+                border: 1px solid var(--hero-kicker-border);
                 border-radius: 999px;
                 padding: 3px 10px;
                 margin-bottom: 8px;
@@ -260,6 +338,7 @@ def inject_theme() -> None:
                 font-family: "Space Grotesk", sans-serif;
                 font-size: clamp(1.45rem, 2.4vw, 2rem);
                 line-height: 1.2;
+                color: var(--ink);
             }
 
             .hero-sub {
@@ -269,10 +348,11 @@ def inject_theme() -> None:
             }
 
             .soft-card {
-                background: rgba(255, 255, 255, 0.82);
+                background: var(--soft-card-bg);
                 border: 1px solid var(--card-border);
                 border-radius: 14px;
                 padding: 12px 14px;
+                color: var(--ink);
             }
 
             .metric-card {
@@ -307,22 +387,22 @@ def inject_theme() -> None:
             .status-ready {
                 background: var(--ok-soft);
                 border-color: var(--ok-border);
-                color: #1c6b4d;
+                color: var(--status-ready-color);
             }
             .status-failed {
                 background: var(--error-soft);
                 border-color: var(--error-border);
-                color: #8d3329;
+                color: var(--status-failed-color);
             }
             .status-processing {
                 background: var(--warn-soft);
                 border-color: var(--warn-border);
-                color: #7d581a;
+                color: var(--status-processing-color);
             }
             .status-pending {
                 background: var(--pending-soft);
                 border-color: var(--pending-border);
-                color: #485a63;
+                color: var(--status-pending-color);
             }
 
             [data-testid="stText"] {
@@ -338,18 +418,18 @@ def inject_theme() -> None:
             div.stFormSubmitButton > button,
             div.stDownloadButton > button {
                 border-radius: 11px;
-                border: 1px solid #0f5f57;
-                background: linear-gradient(135deg, #167269 0%, #0f5f57 100%);
-                color: #f4fffd !important;
+                border: 1px solid var(--btn-border);
+                background: var(--btn-bg);
+                color: var(--btn-color) !important;
                 font-weight: 600;
                 padding: 0.38rem 0.95rem;
                 transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
-                box-shadow: 0 3px 10px rgba(15, 95, 87, 0.22);
+                box-shadow: 0 3px 10px var(--btn-shadow);
             }
             div.stButton > button *,
             div.stFormSubmitButton > button *,
             div.stDownloadButton > button * {
-                color: #f4fffd !important;
+                color: var(--btn-color) !important;
             }
 
             div.stButton > button:hover,
@@ -357,7 +437,7 @@ def inject_theme() -> None:
             div.stDownloadButton > button:hover {
                 transform: translateY(-1px);
                 filter: brightness(1.03);
-                box-shadow: 0 5px 14px rgba(15, 95, 87, 0.28);
+                box-shadow: 0 5px 14px var(--btn-shadow);
             }
 
             div.stButton > button:focus,
@@ -370,44 +450,71 @@ def inject_theme() -> None:
             [data-testid="stSidebar"] div.stButton > button,
             [data-testid="stSidebar"] div.stFormSubmitButton > button,
             [data-testid="stSidebar"] div.stDownloadButton > button {
-                background: linear-gradient(135deg, #ecf8f4 0%, #d8efe9 100%);
-                color: #123f3b !important;
-                border: 1px solid #90c6bb;
+                background: var(--sidebar-btn-bg);
+                color: var(--sidebar-btn-color) !important;
+                border: 1px solid var(--sidebar-btn-border);
                 box-shadow: none;
             }
             [data-testid="stSidebar"] div.stButton > button *,
             [data-testid="stSidebar"] div.stFormSubmitButton > button *,
             [data-testid="stSidebar"] div.stDownloadButton > button * {
-                color: #123f3b !important;
+                color: var(--sidebar-btn-color) !important;
             }
 
             [data-testid="stSidebar"] div.stButton > button:hover,
             [data-testid="stSidebar"] div.stFormSubmitButton > button:hover,
             [data-testid="stSidebar"] div.stDownloadButton > button:hover {
-                background: linear-gradient(135deg, #f5fffc 0%, #e3f8f3 100%);
+                background: var(--sidebar-btn-hover-bg);
             }
 
             /* Streamlit base button variants (primary/secondary/tertiary) */
             button[data-testid^="stBaseButton"] {
-                color: #143a36 !important;
+                color: var(--ink) !important;
             }
             [data-testid="stSidebar"] button[data-testid^="stBaseButton"] {
-                color: #123f3b !important;
+                color: var(--sidebar-btn-color) !important;
             }
             button[data-testid^="stBaseButton"] * {
                 color: inherit !important;
             }
 
-            /* Keep form controls readable across theme overrides */
+            /* Keep form controls readable across light/dark */
             .stTextInput input,
             .stTextArea textarea,
             .stNumberInput input,
             div[data-baseweb="select"] > div {
-                color: #162525 !important;
+                color: var(--input-color) !important;
             }
             .stTextInput input::placeholder,
             .stTextArea textarea::placeholder {
-                color: #5a6a69 !important;
+                color: var(--input-placeholder) !important;
+            }
+
+            /* Chat message text */
+            [data-testid="stChatMessage"] p,
+            [data-testid="stChatMessage"] li,
+            [data-testid="stChatMessage"] span {
+                color: var(--ink) !important;
+            }
+
+            /* Expander text */
+            [data-testid="stExpander"] summary span {
+                color: var(--ink) !important;
+            }
+
+            /* Selectbox display text */
+            div[data-baseweb="select"] span {
+                color: var(--input-color) !important;
+            }
+
+            /* Tabs / segmented control labels */
+            [data-testid="stTabs"] button p {
+                color: var(--ink) !important;
+            }
+
+            /* Caption */
+            .stCaption, [data-testid="stCaptionContainer"] {
+                color: var(--ink-muted) !important;
             }
 
             [data-testid="stDataFrame"] {
@@ -646,7 +753,7 @@ if page == "Notebooks":
     with refresh_col:
         st.write("")
         st.write("")
-        if st.button("Refresh notebooks", use_container_width=True):
+        if st.button("Refresh notebooks", width="stretch"):
             st.rerun()
 
     if submitted:
@@ -680,7 +787,7 @@ if page == "Notebooks":
 
         if notebooks:
             st.write("Your notebooks")
-            st.dataframe(notebooks, use_container_width=True, hide_index=True)
+            st.dataframe(notebooks, width="stretch", hide_index=True)
 
             notebook_options = {
                 f"{n['id']} - {n['title']}": n
@@ -825,10 +932,10 @@ if page == "Notebooks":
                                     if ok:
                                         st.success("File uploaded and source added.")
                                         st.json(create_result)
+                                        st.rerun()
                                     else:
                                         st.error("Failed to upload file source.")
                                         st.code(str(create_result))
-                                    st.rerun()
 
                                 if source_type == "url" and not source_url.strip():
                                     st.error("Please provide a URL when source type is 'url'.")
@@ -878,7 +985,7 @@ if page == "Notebooks":
                                     with source_metrics_3:
                                         render_metric_card("In Flight", processing_sources)
                                     st.write("Sources")
-                                    st.dataframe(sources, use_container_width=True, hide_index=True)
+                                    st.dataframe(sources, width="stretch", hide_index=True)
                                 else:
                                     st.info("No sources yet for this notebook.")
                             else:
@@ -952,7 +1059,7 @@ if page == "Notebooks":
                                     st.markdown(str(content))
                                     if role == "assistant" and isinstance(citations, list) and citations:
                                         with st.expander("Citations", expanded=False):
-                                            st.dataframe(citations, use_container_width=True, hide_index=True)
+                                            st.dataframe(citations, width="stretch", hide_index=True)
                         else:
                             st.error("Failed to fetch messages.")
                             st.code(str(message_result))
@@ -978,7 +1085,7 @@ if page == "Notebooks":
                                     citations = chat_result.get("citations", [])
                                     if citations:
                                         st.write("Citations")
-                                        st.dataframe(citations, use_container_width=True)
+                                        st.dataframe(citations, width="stretch")
                                     st.rerun()
                                 else:
                                     st.error("Chat request failed.")
@@ -1143,7 +1250,7 @@ if page == "Notebooks":
                             with artifact_metric_4:
                                 render_metric_card("Failed", failed_count)
 
-                            st.dataframe(artifacts, use_container_width=True, hide_index=True)
+                            st.dataframe(artifacts, width="stretch", hide_index=True)
                             selected_artifact = choose_artifact_for_notebook(
                                 int(selected_notebook_id),
                                 artifacts,

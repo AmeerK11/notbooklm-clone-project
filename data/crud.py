@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
-from data.models import Artifact
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
-from data.models import ChatThread, Message, MessageCitation, Notebook, Source, User
+from data.models import Artifact, ChatThread, Message, MessageCitation, Notebook, Source, User
 
 
 def get_or_create_user(
@@ -296,7 +295,7 @@ def update_artifact(
         merged.update(metadata)
         artifact.artifact_metadata = merged
     if status == "ready":
-        artifact.generated_at = datetime.utcnow()
+        artifact.generated_at = datetime.now(timezone.utc)
     
     db.commit()
     db.refresh(artifact)

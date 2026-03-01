@@ -22,6 +22,18 @@ def _coerce_user_notebook_ids(owner_user_id: int, notebook_id: int) -> tuple[str
     return str(owner_user_id), str(notebook_id)
 
 
+_embedding_adapter_cache: dict[tuple[str, str], EmbeddingAdapter] = {}
+
+
+def _get_embedding_adapter() -> EmbeddingAdapter:
+    model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    provider = os.getenv("EMBEDDING_PROVIDER", "local")
+    key = (model, provider)
+    if key not in _embedding_adapter_cache:
+        _embedding_adapter_cache[key] = EmbeddingAdapter(model_name=model, provider=provider)
+    return _embedding_adapter_cache[key]
+
+
 def _extract_source_text(source: Source) -> str:
     if source.type == "url" and source.url:
         return extract_text_from_url(source.url).get("text", "")
@@ -97,10 +109,7 @@ def query_notebook_chunks(
         query_text=query_text,
         top_k=top_k,
         source_id=(str(source_id) if source_id is not None else None),
-        query_embedding=EmbeddingAdapter(
-            model_name=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
-            provider=os.getenv("EMBEDDING_PROVIDER", "local"),
-        ).embed_texts([query_text], batch_size=1)[0],
+        query_embedding=_get_embedding_adapter().embed_texts([query_text], batch_size=1)[0],
     )
     return [
         {

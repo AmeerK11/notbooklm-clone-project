@@ -197,7 +197,7 @@ MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_CHARS_PER_MESSAGE = 1000
 MAX_UPLOAD_FILENAME_LENGTH = 255
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-UPLOADS_ROOT = Path("uploads")
+UPLOADS_ROOT = Path(os.getenv("STORAGE_BASE_DIR", "data")) / "uploads"
 
 
 def _build_conversation_history(
@@ -287,13 +287,51 @@ def _remove_tree_within_root(root: Path, target: Path) -> None:
     target_resolved = target.resolve()
     if target_resolved == root_resolved or root_resolved not in target_resolved.parents:
         raise RuntimeError(f"Refusing to delete path outside root: {target_resolved}")
-    shutil.rmtree(target_resolved)
+
+    def _onerror(_func: Any, path: str, _exc_info: Any) -> None:
+        """Handle Windows locked / read-only files by forcing writable."""
+        try:
+            os.chmod(path, 0o777)
+            os.remove(path)
+        except OSError:
+            pass
+
+    # Try up to 3 times to handle file locks (e.g. ChromaDB on Windows)
+    import gc
+    for attempt in range(3):
+        try:
+            shutil.rmtree(target_resolved, onerror=_onerror)
+            return
+        except OSError:
+            if attempt == 2:
+                raise
+            gc.collect()
+            import time
+            time.sleep(0.5)
 
 
 def _cleanup_notebook_storage(owner_user_id: int, notebook_id: int) -> None:
     storage_base = Path(os.getenv("STORAGE_BASE_DIR", "data"))
     notebook_root = storage_base / "users" / str(owner_user_id) / "notebooks"
     notebook_path = notebook_root / str(notebook_id)
+
+    # Release any ChromaDB connections to this notebook before deleting
+    chroma_dir = notebook_path / "chroma"
+    if chroma_dir.exists():
+        try:
+            from src.ingestion.vectorstore import ChromaAdapter
+            store = ChromaAdapter(persist_directory=str(chroma_dir))
+            collection_name = f"user_{owner_user_id}_notebook_{notebook_id}"
+            try:
+                store._client.delete_collection(collection_name)
+            except Exception:
+                pass
+            del store
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+
     _remove_tree_within_root(notebook_root, notebook_path)
 
     upload_path = UPLOADS_ROOT / f"notebook_{notebook_id}"

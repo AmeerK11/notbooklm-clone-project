@@ -4,7 +4,7 @@ Report generator using RAG context from ingested notebook content.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -205,10 +205,11 @@ Requirements:
         return str(body.get("response", "")).strip()
 
     def save_report(self, markdown_text: str, user_id: str, notebook_id: str) -> str:
-        report_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/reports")
+        storage_base = os.getenv("STORAGE_BASE_DIR", "data")
+        report_dir = Path(storage_base) / "users" / user_id / "notebooks" / notebook_id / "artifacts" / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         path = report_dir / f"report_{timestamp}.md"
         path.write_text(markdown_text, encoding="utf-8")
         return str(path)

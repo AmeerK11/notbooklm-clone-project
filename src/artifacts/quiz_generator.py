@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -135,7 +135,7 @@ class QuizGenerator:
                     "topic_focus": topic_focus,
                     "llm_provider": self.llm_provider,
                     "llm_model": self.model,
-                    "generated_at": datetime.utcnow().isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
 
@@ -149,7 +149,7 @@ class QuizGenerator:
                 "topic_focus": topic_focus,
                 "llm_provider": self.llm_provider,
                 "llm_model": self.model,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
             },
         }
 
@@ -466,10 +466,11 @@ Requirements:
 
     def save_quiz(self, quiz_markdown: str, user_id: str, notebook_id: str) -> str:
         """Save generated quiz Markdown to file."""
-        quiz_dir = Path(f"data/users/{user_id}/notebooks/{notebook_id}/artifacts/quizzes")
+        storage_base = os.getenv("STORAGE_BASE_DIR", "data")
+        quiz_dir = Path(storage_base) / "users" / user_id / "notebooks" / notebook_id / "artifacts" / "quizzes"
         quiz_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"quiz_{timestamp}.md"
         filepath = quiz_dir / filename
 
