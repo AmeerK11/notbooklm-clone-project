@@ -824,7 +824,7 @@ if page == "Notebooks":
     with refresh_col:
         st.write("")
         st.write("")
-        if st.button("Refresh notebooks", width="stretch"):
+        if st.button("Refresh notebooks", use_container_width=True):
             st.rerun()
 
     if submitted:
@@ -858,7 +858,7 @@ if page == "Notebooks":
 
         if notebooks:
             st.write("Your notebooks")
-            st.dataframe(notebooks, width="stretch", hide_index=True)
+            st.dataframe(notebooks, use_container_width=True, hide_index=True)
 
             notebook_options = {
                 f"{n['id']} - {n['title']}": n
@@ -1056,7 +1056,7 @@ if page == "Notebooks":
                                     with source_metrics_3:
                                         render_metric_card("In Flight", processing_sources)
                                     st.write("Sources")
-                                    st.dataframe(sources, width="stretch", hide_index=True)
+                                    st.dataframe(sources, use_container_width=True, hide_index=True)
                                 else:
                                     st.info("No sources yet for this notebook.")
                             else:
@@ -1130,7 +1130,7 @@ if page == "Notebooks":
                                     st.markdown(str(content))
                                     if role == "assistant" and isinstance(citations, list) and citations:
                                         with st.expander("Citations", expanded=False):
-                                            st.dataframe(citations, width="stretch", hide_index=True)
+                                            st.dataframe(citations, use_container_width=True, hide_index=True)
                         else:
                             st.error("Failed to fetch messages.")
                             st.code(str(message_result))
@@ -1156,7 +1156,7 @@ if page == "Notebooks":
                                     citations = chat_result.get("citations", [])
                                     if citations:
                                         st.write("Citations")
-                                        st.dataframe(citations, width="stretch")
+                                        st.dataframe(citations, use_container_width=True)
                                     st.rerun()
                                 else:
                                     st.error("Chat request failed.")
@@ -1321,7 +1321,7 @@ if page == "Notebooks":
                             with artifact_metric_4:
                                 render_metric_card("Failed", failed_count)
 
-                            st.dataframe(artifacts, width="stretch", hide_index=True)
+                            st.dataframe(artifacts, use_container_width=True, hide_index=True)
                             selected_artifact = choose_artifact_for_notebook(
                                 int(selected_notebook_id),
                                 artifacts,
