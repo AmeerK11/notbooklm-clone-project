@@ -273,8 +273,7 @@ This repo now includes:
 4. For HF OAuth mode, also set:
    - `HF_OAUTH_CLIENT_ID`
    - `HF_OAUTH_CLIENT_SECRET`
-   - `HF_OAUTH_REDIRECT_URI` (backend callback URL, e.g. `https://<space>.hf.space/proxy/8000/auth/callback`)
+   - `HF_OAUTH_REDIRECT_URI` (Space URL registered in your HF Connected App, e.g. `https://<space>.hf.space/`)
    - `AUTH_SUCCESS_REDIRECT_URL` (your Space URL)
-   - `BACKEND_PUBLIC_URL=https://<space>.hf.space/proxy/8000` (used for browser OAuth links)
 
 The container exposes Streamlit on port `7860` and points the frontend to the internal backend via `BACKEND_URL=http://127.0.0.1:8000`.

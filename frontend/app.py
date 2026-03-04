@@ -9,7 +9,6 @@ import streamlit as st
 st.set_page_config(page_title="NotebookLM Clone", page_icon="📚", layout="wide")
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
-BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").strip()
 REQUEST_TIMEOUT_SECONDS = 30
 
 STATUS_LABELS = {
@@ -115,21 +114,58 @@ def api_post_multipart(
     return api_request("POST", path, data=data, files=files)
 
 
-def _join_url(base_url: str, path: str) -> str:
-    base = base_url.rstrip("/")
-    normalized_path = path if path.startswith("/") else f"/{path}"
-    return f"{base}{normalized_path}"
+def request_backend_get_raw(
+    path: str,
+    *,
+    params: dict | None = None,
+    allow_redirects: bool = True,
+) -> tuple[bool, requests.Response | str]:
+    base_url = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
+    url = f"{base_url}{path}"
+    try:
+        response = get_http_session().request(
+            method="GET",
+            url=url,
+            params=params,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            allow_redirects=allow_redirects,
+        )
+        return True, response
+    except requests.RequestException as exc:
+        return False, str(exc)
 
 
-def build_oauth_login_url(auth_payload: dict[str, Any]) -> str:
-    login_url = str(auth_payload.get("login_url") or "/auth/login").strip()
-    if login_url.startswith(("http://", "https://")):
-        return login_url
+def begin_hf_oauth() -> tuple[bool, str]:
+    ok, response_or_error = request_backend_get_raw("/auth/login", allow_redirects=False)
+    if not ok:
+        return False, str(response_or_error)
 
-    browser_backend_root = (BACKEND_PUBLIC_URL or st.session_state.get("backend_url", BACKEND_URL)).strip()
-    if not browser_backend_root:
-        browser_backend_root = BACKEND_URL
-    return _join_url(browser_backend_root, login_url)
+    response = response_or_error
+    if not isinstance(response, requests.Response):
+        return False, "Unexpected OAuth start response."
+    if response.status_code not in {301, 302, 303, 307, 308}:
+        return False, f"OAuth start failed with HTTP {response.status_code}: {response.text}"
+    location = response.headers.get("location", "").strip()
+    if not location:
+        return False, "OAuth start failed: missing redirect location."
+    return True, location
+
+
+def complete_hf_oauth(code: str, state: str) -> tuple[bool, str | None]:
+    ok, response_or_error = request_backend_get_raw(
+        "/auth/callback",
+        params={"code": code, "state": state},
+        allow_redirects=False,
+    )
+    if not ok:
+        return False, str(response_or_error)
+
+    response = response_or_error
+    if not isinstance(response, requests.Response):
+        return False, "Unexpected OAuth callback response."
+    if response.status_code in {301, 302, 303, 307, 308}:
+        return True, None
+    return False, f"OAuth callback failed with HTTP {response.status_code}: {response.text}"
 
 
 def fetch_notebooks() -> tuple[bool, list[dict] | str]:
@@ -718,6 +754,10 @@ if "bridge_error" not in st.session_state:
     st.session_state["bridge_error"] = None
 if "processed_bridge_token" not in st.session_state:
     st.session_state["processed_bridge_token"] = None
+if "processed_oauth_callback" not in st.session_state:
+    st.session_state["processed_oauth_callback"] = None
+if "oauth_login_url" not in st.session_state:
+    st.session_state["oauth_login_url"] = None
 
 bridge_token = get_query_param("auth_bridge")
 if bridge_token and bridge_token != st.session_state["processed_bridge_token"]:
@@ -729,6 +769,34 @@ if bridge_token and bridge_token != st.session_state["processed_bridge_token"]:
         st.rerun()
     st.session_state["bridge_error"] = str(bridge_result)
     st.rerun()
+
+oauth_error = get_query_param("error")
+oauth_error_description = get_query_param("error_description")
+oauth_code = get_query_param("code")
+oauth_state = get_query_param("state")
+if oauth_error:
+    st.session_state["bridge_error"] = (
+        f"OAuth provider error: {oauth_error} ({oauth_error_description})"
+        if oauth_error_description
+        else f"OAuth provider error: {oauth_error}"
+    )
+    for key in ("error", "error_description", "code", "state"):
+        remove_query_param(key)
+    st.rerun()
+
+if oauth_code and oauth_state:
+    callback_key = f"{oauth_code}:{oauth_state}"
+    if callback_key != st.session_state["processed_oauth_callback"]:
+        st.session_state["processed_oauth_callback"] = callback_key
+        callback_ok, callback_error = complete_hf_oauth(code=oauth_code, state=oauth_state)
+        for key in ("code", "state", "auth_bridge"):
+            remove_query_param(key)
+        if callback_ok:
+            st.session_state["bridge_error"] = None
+            st.session_state["oauth_login_url"] = None
+            st.rerun()
+        st.session_state["bridge_error"] = str(callback_error)
+        st.rerun()
 
 with st.sidebar:
     st.markdown("### Workspace")
@@ -763,6 +831,7 @@ with st.sidebar:
             st.session_state.pop("selected_notebook_id", None)
             st.session_state.pop("selected_notebook_title", None)
             st.session_state.pop("selected_thread_id", None)
+            st.session_state["oauth_login_url"] = None
             st.rerun()
     elif auth_mode == "dev":
         with st.form("dev_login_form"):
@@ -781,14 +850,21 @@ with st.sidebar:
                 st.rerun()
             st.error(f"Login failed: {login_result}")
     elif auth_mode == "hf_oauth":
-        login_url = build_oauth_login_url(auth_data)
-        st.markdown(f"[Sign in with Hugging Face]({login_url})")
+        if not st.session_state.get("oauth_login_url"):
+            oauth_ok, oauth_result = begin_hf_oauth()
+            if oauth_ok:
+                st.session_state["oauth_login_url"] = oauth_result
+            else:
+                st.session_state["bridge_error"] = str(oauth_result)
+        login_url = st.session_state.get("oauth_login_url")
+        if login_url:
+            st.markdown(f"[Sign in with Hugging Face]({login_url})")
+        else:
+            st.warning("Unable to start OAuth. Check backend auth settings and retry.")
+        if st.button("Refresh login link"):
+            st.session_state["oauth_login_url"] = None
+            st.rerun()
         st.caption("After provider login, you will be redirected back and signed in automatically.")
-        if not BACKEND_PUBLIC_URL and ("127.0.0.1" in login_url or "localhost" in login_url):
-            st.info(
-                "If this app is hosted remotely, set BACKEND_PUBLIC_URL "
-                "(example: https://<space>.hf.space/proxy/8000)."
-            )
         if st.button("Refresh auth"):
             st.rerun()
     else:
