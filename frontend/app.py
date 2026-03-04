@@ -9,6 +9,7 @@ import streamlit as st
 st.set_page_config(page_title="NotebookLM Clone", page_icon="📚", layout="wide")
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+BACKEND_PUBLIC_URL = os.getenv("BACKEND_PUBLIC_URL", "").strip()
 REQUEST_TIMEOUT_SECONDS = 30
 
 STATUS_LABELS = {
@@ -112,6 +113,23 @@ def api_post_multipart(
     files: dict[str, tuple[str, bytes, str]],
 ) -> tuple[bool, dict | list | str, int | None]:
     return api_request("POST", path, data=data, files=files)
+
+
+def _join_url(base_url: str, path: str) -> str:
+    base = base_url.rstrip("/")
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return f"{base}{normalized_path}"
+
+
+def build_oauth_login_url(auth_payload: dict[str, Any]) -> str:
+    login_url = str(auth_payload.get("login_url") or "/auth/login").strip()
+    if login_url.startswith(("http://", "https://")):
+        return login_url
+
+    browser_backend_root = (BACKEND_PUBLIC_URL or st.session_state.get("backend_url", BACKEND_URL)).strip()
+    if not browser_backend_root:
+        browser_backend_root = BACKEND_URL
+    return _join_url(browser_backend_root, login_url)
 
 
 def fetch_notebooks() -> tuple[bool, list[dict] | str]:
@@ -763,9 +781,14 @@ with st.sidebar:
                 st.rerun()
             st.error(f"Login failed: {login_result}")
     elif auth_mode == "hf_oauth":
-        backend_root = st.session_state.get("backend_url", BACKEND_URL).rstrip("/")
-        st.markdown(f"[Sign in with Hugging Face]({backend_root}/auth/login)")
+        login_url = build_oauth_login_url(auth_data)
+        st.markdown(f"[Sign in with Hugging Face]({login_url})")
         st.caption("After provider login, you will be redirected back and signed in automatically.")
+        if not BACKEND_PUBLIC_URL and ("127.0.0.1" in login_url or "localhost" in login_url):
+            st.info(
+                "If this app is hosted remotely, set BACKEND_PUBLIC_URL "
+                "(example: https://<space>.hf.space/proxy/8000)."
+            )
         if st.button("Refresh auth"):
             st.rerun()
     else:
