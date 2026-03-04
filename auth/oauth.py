@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 
 class HFOAuthError(RuntimeError):
@@ -21,6 +22,17 @@ class HFOAuthSettings:
     token_url: str
     userinfo_url: str
     scope: str
+
+
+OAUTH_STATE_SALT = "hf-oauth-state"
+DEFAULT_OAUTH_STATE_SECRET = "dev-only-session-secret-change-me"
+
+
+def _oauth_state_serializer() -> URLSafeTimedSerializer:
+    secret = os.getenv("APP_SESSION_SECRET", DEFAULT_OAUTH_STATE_SECRET).strip()
+    if not secret:
+        secret = DEFAULT_OAUTH_STATE_SECRET
+    return URLSafeTimedSerializer(secret_key=secret, salt=OAUTH_STATE_SALT)
 
 
 def get_hf_oauth_settings() -> HFOAuthSettings:
@@ -40,7 +52,20 @@ def get_hf_oauth_settings() -> HFOAuthSettings:
 
 
 def generate_oauth_state() -> str:
-    return secrets.token_urlsafe(32)
+    payload = {"nonce": secrets.token_urlsafe(32)}
+    return _oauth_state_serializer().dumps(payload)
+
+
+def is_valid_oauth_state(state: str) -> bool:
+    ttl_seconds = int(os.getenv("AUTH_OAUTH_STATE_TTL_SECONDS", "600"))
+    try:
+        payload = _oauth_state_serializer().loads(state, max_age=ttl_seconds)
+    except (BadSignature, SignatureExpired):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    nonce = payload.get("nonce")
+    return isinstance(nonce, str) and bool(nonce.strip())
 
 
 def build_hf_authorize_url(redirect_uri: str, state: str) -> str:

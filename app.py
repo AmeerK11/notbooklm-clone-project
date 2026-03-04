@@ -16,7 +16,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from auth.oauth import HFOAuthError, build_hf_authorize_url, exchange_code_for_hf_user, generate_oauth_state
+from auth.oauth import (
+    HFOAuthError,
+    build_hf_authorize_url,
+    exchange_code_for_hf_user,
+    generate_oauth_state,
+    is_valid_oauth_state,
+)
 from auth.session import (
     AUTH_MODE_DEV,
     AUTH_MODE_HF,
@@ -454,7 +460,12 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)) -> Redi
     expected_state = request.session.get("oauth_state")
     state = request.query_params.get("state")
     code = request.query_params.get("code")
-    if not expected_state or not state or state != expected_state:
+    if not state:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state.")
+    if expected_state:
+        if state != expected_state:
+            raise HTTPException(status_code=400, detail="Invalid OAuth state.")
+    elif not is_valid_oauth_state(state):
         raise HTTPException(status_code=400, detail="Invalid OAuth state.")
     if not code:
         raise HTTPException(status_code=400, detail="Missing OAuth code.")
